@@ -18,6 +18,10 @@ def warn(m): return f"{WARN} {m}"
 pn.extension('tabulator')
 
 def _parse_wide_aligned_csv(name: str, data: bytes) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], Optional[np.ndarray]]:
+    """
+    Expect a 'pseudotimes_wide.csv' with optional 'time' column and,
+    per sample S: columns '{S}_pt' and '{S}'.
+    """
     df = pd.read_csv(io.BytesIO(data or b""))
     cols = list(df.columns)
     samples = []
@@ -28,28 +32,25 @@ def _parse_wide_aligned_csv(name: str, data: bytes) -> Tuple[pd.DataFrame, pd.Da
         if f"{s}_pt" in cols:
             samples.append(s)
     if not samples:
-        raise ValueError("No valid sample columns found (expect '{sample}_pt' and '{sample}')")
-
-    P = pd.DataFrame({s: df[f"{s}_pt"].to_numpy() for s in samples})
-    Y = pd.DataFrame({s: df[s].to_numpy() for s in samples})
-    P.index = df.index
-    Y.index = df.index
+        raise ValueError("No valid sample columns found (need matching '{sample}_pt' and '{sample}')")
+    P = pd.DataFrame({s: df[f"{s}_pt"].to_numpy() for s in samples}, index=df.index)
+    Y = pd.DataFrame({s: df[s].to_numpy() for s in samples}, index=df.index)
     t = df["time"].to_numpy() if "time" in df.columns else None
     return P, Y, samples, t
 
 
 class NMFController:
     """
-    NMF tab controller using CEtools' continuous Gaussian basis NNLS routines.
+    NMF tab controller using CEtools continuous-basis NNLS.
 
     Public:
-      - set_input(pseudotimes_df, norm_df, rows_are_traces=False)  # back-compat
+      - set_input(pseudotimes_df, norm_df, rows_are_traces=False)   # back-compat
       - set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=False)
       - on_done: Optional[Callable[[pd.DataFrame], None]]
       - on_aligned_imported: Optional[Callable[[pd.DataFrame, pd.DataFrame, bool], None]]
     """
     def __init__(self):
-        # Active working data (drives preview/calc)
+        # Active working data
         self.pseudotimes_df: Optional[pd.DataFrame] = None
         self.norm_df: Optional[pd.DataFrame] = None
         self.rows_are_traces: bool = False
@@ -65,25 +66,28 @@ class NMFController:
         self.centers = None
         self.pseudo_used_df: Optional[pd.DataFrame] = None
 
-        # Callbacks into app
+        # Callbacks
         self.on_done: Optional[Callable[[pd.DataFrame], None]] = None
         self.on_aligned_imported: Optional[Callable[[pd.DataFrame, pd.DataFrame, bool], None]] = None
 
-        # ---------------- Source toggle ----------------
+        # -------- Source toggle (FIX: dict mapping label -> token) --------
         self.source_select = pn.widgets.RadioButtonGroup(
             name="Source",
+            options={
+                "Alignment (current session)": "alignment",
+                "CSV (pseudotimes_wide.csv)": "csv",
+            },
             value="alignment",
-            options=[("Alignment (current session)", "alignment"), ("CSV (pseudotimes_wide.csv)", "csv")],
-            button_type="primary"
+            button_type="primary",
         )
 
-        # ---------------- Import aligned CSV ----------------
+        # -------- CSV import --------
         self.aligned_file = pn.widgets.FileInput(accept=".csv", multiple=False)
         self.aligned_load_btn = pn.widgets.Button(name="Load aligned pseudotimes_wide.csv", button_type="primary")
         self.aligned_status = pn.pane.Markdown("", sizing_mode="stretch_width")
         self.aligned_preview = pn.widgets.Tabulator(pd.DataFrame(), height=180, show_index=False)
 
-        # ---------------- Controls ----------------
+        # -------- Controls --------
         self.k_slider = pn.widgets.IntSlider(name="K (number of basis)", start=20, end=500, value=250, step=5, width=260)
         self.l2_input = pn.widgets.FloatInput(name="L2 (ridge)", value=1e-5, step=1e-5, start=0.0, width=160)
         self.sample_select = pn.widgets.Select(name="Sample for preview", options=[], value=None, width=260)
@@ -91,20 +95,23 @@ class NMFController:
         self.calc_btn = pn.widgets.Button(name="Calculate NMF Loadings", button_type="success", disabled=True)
         self.status = pn.pane.Markdown("", sizing_mode="stretch_width")
 
-        # ---------------- Plots ----------------
+        # -------- Plots --------
         self.recon_pane = pn.pane.Bokeh(height=420, sizing_mode="stretch_width")
         self.heatmap_pane = pn.pane.Bokeh(height=520, sizing_mode="stretch_width")
 
-        # ---------------- Export (loadings CSV) ----------------
+        # -------- Export --------
         self.csv_name = pn.widgets.TextInput(name="Loadings CSV filename", value="nmf_loadings.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
             label="Download loadings CSV", filename=self.csv_name.value,
-            button_type="primary", embed=False, auto=False, callback=lambda: io.BytesIO(b""),
+            button_type="primary", embed=False, auto=False,
+            callback=lambda: io.BytesIO(b""),
             disabled=True
         )
-        self.csv_name.param.watch(lambda e: setattr(self.csv_download, "filename", e.new or "nmf_loadings.csv"), "value")
+        self.csv_name.param.watch(
+            lambda e: setattr(self.csv_download, "filename", e.new or "nmf_loadings.csv"), "value"
+        )
 
-        # Layout
+        # Layout bits
         self._csv_row = pn.Row(self.aligned_file, pn.Spacer(width=8), self.aligned_load_btn)
         self.section = pn.Column(
             pn.pane.Markdown("## 4) NMF"),
@@ -127,7 +134,7 @@ class NMFController:
         )
 
         # Wire
-        self.source_select.param.watch(lambda *_: self._on_source_changed(), "value")
+        self.source_select.param.watch(self._on_source_changed, "value")
         self.aligned_load_btn.on_click(self._on_load_aligned_csv)
         self.preview_btn.on_click(self._on_preview)
         self.calc_btn.on_click(self._on_calculate)
@@ -136,27 +143,26 @@ class NMFController:
         self.sample_select.param.watch(lambda *_: self._maybe_enable_preview(), "value")
         self.csv_download.callback = self._csv_bytes
 
-        # Default UI state
+        # Default UI
         self._apply_csv_visibility(show=False)
 
     # ---------------- External API ----------------
     def set_input(self, pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool) -> None:
-        """
-        Back-compat: set whichever source is currently selected.
-        """
-        if (self.source_select.value or "alignment") == "alignment":
+        """Back-compat: set the currently selected source."""
+        current = self._normalize_source_token(self.source_select.value)
+        if current == "alignment":
             self.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
         else:
-            # rarely used; CSV usually comes via loader
             self._set_source_input("csv", pseudotimes_df, norm_df, rows_are_traces)
+            self._apply_source("csv")
 
     def set_alignment_input(self, pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool) -> None:
+        """Preferred path when arriving from Alignment."""
         self._set_source_input("alignment", pseudotimes_df, norm_df, rows_are_traces)
-        if self.source_select.value != "alignment":
-            # Users arriving from Alignment should see Alignment by default.
+        # Force select & apply Alignment as the active source
+        if self._normalize_source_token(self.source_select.value) != "alignment":
             self.source_select.value = "alignment"
-        else:
-            self._apply_source("alignment")
+        self._apply_source("alignment")
 
     # ---------------- CSV import path ----------------
     def _on_load_aligned_csv(self, _=None):
@@ -178,18 +184,20 @@ class NMFController:
                 d["time"] = t
             for s in show:
                 d[f"{s}_pt"] = P[s].to_numpy()
+            for s in show:
                 d[s] = Y[s].to_numpy()
             self.aligned_preview.value = pd.DataFrame(d).head(8)
         except Exception:
             self.aligned_preview.value = pd.DataFrame({"samples": samples})
 
         self.aligned_status.object = ok(f"Loaded aligned CSV for {len(samples)} samples; priming NMF...")
-        # Store as CSV source, columns-as-samples
         self._set_source_input("csv", P, Y, rows_are_traces=False)
-        if self.source_select.value == "csv":
-            self._apply_source("csv")
+        # Ensure UI shows CSV and apply it
+        if self._normalize_source_token(self.source_select.value) != "csv":
+            self.source_select.value = "csv"
+        self._apply_source("csv")
 
-        # Notify app so downstream tabs can also use it
+        # Let app know aligned data is now present (so Viz/Diversity can use it)
         if callable(self.on_aligned_imported):
             try:
                 self.on_aligned_imported(P, Y, False)
@@ -197,21 +205,31 @@ class NMFController:
                 pass
 
     # ---------------- Internal helpers ----------------
+    @staticmethod
+    def _normalize_source_token(val) -> Literal["alignment","csv"]:
+        # With dict options, value is the token already; guard anyway.
+        if val in ("alignment", "csv"):
+            return val
+        # If someone misconfigures options to labels, fall back heuristics:
+        s = str(val).lower()
+        if "csv" in s:
+            return "csv"
+        return "alignment"
+
     def _set_source_input(self, kind: Literal["alignment","csv"], P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: bool):
-        if rows_are_traces:
-            samples = list(map(str, P.index.astype(str)))
-        else:
-            samples = list(map(str, P.columns.astype(str)))
+        samples = list(map(str, (P.index if rows_are_traces else P.columns).astype(str)))
+        blob = (P.copy(), Y.copy(), bool(rows_are_traces), samples)
         if kind == "alignment":
-            self._alignment_input = (P.copy(), Y.copy(), bool(rows_are_traces), samples)
+            self._alignment_input = blob
         else:
-            self._csv_input = (P.copy(), Y.copy(), bool(rows_are_traces), samples)
+            self._csv_input = blob
 
     def _apply_source(self, kind: Literal["alignment","csv"]) -> None:
         tpl = self._alignment_input if kind == "alignment" else self._csv_input
         if tpl is None:
             self._clear_active()
-            self.status.object = warn("Selected source has no data yet.")
+            which = "Alignment" if kind == "alignment" else "CSV"
+            self.status.object = warn(f"Selected source **{which}** has no data yet.")
             return
         P, Y, rows_are_traces, samples = tpl
         self.pseudotimes_df = P.copy()
@@ -222,8 +240,9 @@ class NMFController:
         # Prime controls
         self.sample_select.options = self.samples
         self.sample_select.value = self.samples[0] if self.samples else None
-        self.preview_btn.disabled = not bool(self.samples)
-        self.calc_btn.disabled = not bool(self.samples)
+        has = bool(self.samples)
+        self.preview_btn.disabled = not has
+        self.calc_btn.disabled = not has
         self.status.object = ok(f"NMF input set from **{ 'Alignment' if kind=='alignment' else 'CSV' }**: {len(self.samples)} samples.")
         # Clear panes & export
         self.recon_pane.object = None
@@ -247,11 +266,12 @@ class NMFController:
         self._csv_row.visible = show
         self.aligned_preview.visible = show
         self.aligned_status.visible = show
+        # Why: users think it's "dead" if the uploader row is hidden.
 
-    def _on_source_changed(self):
-        is_csv = self.source_select.value == "csv"
-        self._apply_csv_visibility(show=is_csv)
-        self._apply_source("csv" if is_csv else "alignment")
+    def _on_source_changed(self, *_):
+        kind = self._normalize_source_token(self.source_select.value)
+        self._apply_csv_visibility(show=(kind == "csv"))
+        self._apply_source(kind)
         self._maybe_enable_preview()
 
     # ---------------- Actions ----------------
