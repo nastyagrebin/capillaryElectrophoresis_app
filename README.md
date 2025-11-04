@@ -5,18 +5,18 @@ Interactive Bokeh/Panel app for upload → preprocess → align → NMF → alph
 ## Quick start (fastest path)
 
 ### Option A: Mamba/Conda (recommended)
-1. Install **Mambaforge** (or Miniforge/Conda) from conda-forge.
-2. Open a terminal in this folder and run:
+1. Install **Miniforge** from conda-forge. Run the installer and restart your terminal so conda is available.
+2. Download all files in this repo, keeping the folder structure the same.
+3. create the environment. Open a terminal at the root of this repo and run:
    ```bash
-   mamba env create -f environment.yml
-   mamba activate cetools-app
-   ```
+   conda env create -f environment.yml
+   conda activate cetools-app
 
-3. Install the local CEtools package (from this repo):
+4. Install the local CEtools package (from this repo):
    ```bash
    pip install -e CEtools
    ```
-4. Launch the app:
+5. Launch the app:
    ```bash
    panel serve app/app.py --show
 
