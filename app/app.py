@@ -412,8 +412,19 @@ alignment_section, alignment_ctrl = build_alignment_section()
 alignment_section.visible = True  # keep anchors UI present
 
 # ---------- NMF tab ----------
-nmf_section, nmf_ctrl = build_nmf_section()  # includes CSV import & source toggle
+# ---------- NMF tab ----------
+nmf_section, nmf_ctrl = build_nmf_section()
 nmf_section.visible = True
+
+# Provide a pull-based alignment provider to NMF
+def _provide_alignment_for_nmf():
+    P = state.aligned_pseudotimes_df
+    Y = state.aligned_norm_df
+    if P is None or Y is None:
+        return None
+    return (P.copy(), Y.copy(), bool(state.rows_are_traces_aligned))
+
+nmf_ctrl.on_request_alignment = _provide_alignment_for_nmf
 
 def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: bool):
     state.aligned_pseudotimes_df = P.copy()
@@ -421,31 +432,45 @@ def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: boo
     state.rows_are_traces_aligned = bool(rows_are_traces)
 nmf_ctrl.on_aligned_imported = _nmf_aligned_imported
 
-
+# When Alignment finishes, still push into NMF eagerly (push path)
 def _unlock_nmf_from_alignment(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
-    # Persist
     state.aligned_pseudotimes_df = pseudotimes_df.copy()
     state.aligned_norm_df = norm_df.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
-
-    # Feed into NMF and **explicitly** select Alignment as source
     try:
         nmf_ctrl.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-        try:
-            nmf_ctrl.source_select.value = "alignment"  # token, not label
-        except Exception:
-            pass
+        try: nmf_ctrl.source_select.value = "alignment"
+        except Exception: pass
     except Exception:
-        try:
-            nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-        except Exception:
-            pass
-
+        try: nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+        except Exception: pass
     _force_unlock_nmf_controls()
+    try: nmf_section.visible = True
+    except Exception: pass
+
+# Hook alignment completion (if the controller exposes on_aligned)
+try:
+    def _alignment_done_callback(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
+        _unlock_nmf_from_alignment(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+    alignment_ctrl.on_aligned = _alignment_done_callback
+except Exception:
+    pass
+
+# EXTRA: When user switches to the NMF tab, push alignment data if available
+def _on_tabs_active_changed(event):
     try:
-        nmf_section.visible = True
+        if event.new == 3:  # 0:Upload,1:Preprocess,2:Alignment,3:NMF
+            if state.aligned_pseudotimes_df is not None and state.aligned_norm_df is not None:
+                nmf_ctrl.set_alignment_input(
+                    state.aligned_pseudotimes_df, state.aligned_norm_df,
+                    rows_are_traces=state.rows_are_traces_aligned
+                )
+                try: nmf_ctrl.source_select.value = "alignment"
+                except Exception: pass
     except Exception:
         pass
+
+TABS.param.watch(_on_tabs_active_changed, "active")
 
 # ---------- Viz tab ----------
 viz_section, viz_ctrl = build_viz_section()
