@@ -1,6 +1,3 @@
-# ============================
-# FILE: app/app.py
-# ============================
 from __future__ import annotations
 import io, zipfile
 from pathlib import Path
@@ -31,7 +28,7 @@ except Exception:
 from alignment_utils import build_alignment_section
 from nmf_utils import build_nmf_section
 from viz_utils import build_viz_section
-from diversity_utils import build_diversity_section   # updated controller expects set_input(pseudotimes_df, norm_df, rows_are_traces)
+from diversity_utils import build_diversity_section
 
 OK = "OK:"; WARN = "Warning:"
 def ok(m): return f"{OK} {m}"
@@ -57,10 +54,10 @@ class SessionState:
         # aligned data (from Alignment or CSV import via NMF tab)
         self.aligned_pseudotimes_df: Optional[pd.DataFrame] = None
         self.aligned_norm_df: Optional[pd.DataFrame] = None
+        self.rows_are_traces_aligned: bool = False
 
         # NMF loadings
         self.H_df: Optional[pd.DataFrame] = None
-        self.rows_are_traces_aligned: bool = False
 
 state = SessionState()
 
@@ -177,7 +174,7 @@ def _on_upload_change(event):
     downloads_group.visible = False
     preview_group.visible = False
 
-    # also (safely) hide alignment preview on new uploads
+    # keep alignment section visible
     try:
         alignment_section.visible = True
     except Exception:
@@ -332,24 +329,16 @@ norm_section.visible = False
 
 # ---------- Alignment tab ----------
 alignment_section, alignment_ctrl = build_alignment_section()
-alignment_section.visible = True  # keep visible so anchors UI is present
+alignment_section.visible = True  # keep anchors UI present
 
 # ---------- NMF tab ----------
 nmf_section, nmf_ctrl = build_nmf_section()  # includes "Load aligned CSV" at top
 nmf_section.visible = True
+
 def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: bool):
-    # Store aligned data
     state.aligned_pseudotimes_df = P.copy()
     state.aligned_norm_df = Y.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
-    # Feed Diversity immediately so its Compute button enables
-    try:
-        diversity_ctrl.set_input(state.aligned_pseudotimes_df, state.aligned_norm_df,
-                                 rows_are_traces=state.rows_are_traces_aligned)
-        diversity_section.visible = True
-    except Exception:
-        pass
-
 nmf_ctrl.on_aligned_imported = _nmf_aligned_imported
 
 # ---------- Viz tab ----------
@@ -359,11 +348,6 @@ viz_section.visible = True
 # ---------- Diversity tab ----------
 diversity_section, diversity_ctrl = build_diversity_section()
 diversity_section.visible = True
-
-try:
-    diversity_ctrl.on_updated = viz_ctrl.set_diversity
-except Exception:
-    pass
 
 # ===================== UNLOCK HELPERS =====================
 
@@ -439,31 +423,69 @@ def _unlock_alignment():
     alignment_ctrl.set_input(state.current_by_sample)
     alignment_section.visible = True
 
+def _force_unlock_nmf_controls():
+    """Try to enable all common NMF UI bits regardless of internal names."""
+    for attr in ("import_btn", "preview_btn", "calc_btn", "apply_btn", "run_btn"):
+        btn = getattr(nmf_ctrl, attr, None)
+        try:
+            if btn is not None:
+                btn.disabled = False
+        except Exception:
+            pass
+    # If controller exposes a status/message pane, note the source
+    for attr in ("status", "info", "message"):
+        pane = getattr(nmf_ctrl, attr, None)
+        try:
+            if pane is not None and hasattr(pane, "object"):
+                pane.object = ok("Aligned data connected from Alignment tab. NMF is ready.")
+        except Exception:
+            pass
+
 def _unlock_nmf_from_alignment(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
+    # Persist to session
     state.aligned_pseudotimes_df = pseudotimes_df.copy()
     state.aligned_norm_df = norm_df.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
-    nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+
+    # Feed into NMF controller and unlock UI
+    try:
+        nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+    except Exception:
+        # Back-compat: some versions use set_aligned_input(...)
+        try:
+            nmf_ctrl.set_aligned_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+        except Exception:
+            pass
+
+    _force_unlock_nmf_controls()
+
     try:
         nmf_section.visible = True
-    except Exception:
-        pass
-    # ALSO enable Diversity immediately with aligned data
-    try:
-        diversity_ctrl.set_input(state.aligned_pseudotimes_df, state.aligned_norm_df,
-                                 rows_are_traces=state.rows_are_traces_aligned)
-        diversity_section.visible = True
+        # Optionally switch to NMF so user sees it's ready:
+        # TABS.active = 3
     except Exception:
         pass
 
 def _unlock_viz_diversity_after_nmf(H_df: pd.DataFrame):
     state.H_df = H_df.copy()
+    # Viz
     try:
         viz_ctrl.set_input(H_df)
         viz_section.visible = True
     except Exception:
         pass
-    # Diversity already has aligned inputs from alignment/import; keep visible.
+    # Diversity: connect aligned inputs so user can compute either from aligned or from H
+    try:
+        if state.aligned_pseudotimes_df is not None and state.aligned_norm_df is not None:
+            diversity_ctrl.set_input(
+                state.aligned_pseudotimes_df,
+                state.aligned_norm_df,
+                rows_are_traces=state.rows_are_traces_aligned
+            )
+        diversity_ctrl.set_H(H_df)
+        diversity_section.visible = True
+    except Exception:
+        pass
 
 # ===================== WIRING: APPLY/SKIP ADVANCE =====================
 
@@ -559,10 +581,10 @@ def _init_preprocess_from_current():
     smooth_section.visible = False
     baseline_section.visible = False
     norm_section.visible = False
-    # keep alignment visible but empty until unlocked
+    # alignment visible but waiting for data
     alignment_section.visible = True
 
-# Bind wiring
+# Bind wiring for preprocess
 _wire_despike_apply()
 _wire_despike_skip()
 _wire_smooth_apply()
@@ -592,15 +614,16 @@ def _wire_norm_apply_skip():
 
 _wire_norm_apply_skip()
 
-# ---------- Bridge Alignment → NMF (+ Diversity enable) ----------
+# ---------- Bridge Alignment → NMF ----------
 try:
     def _alignment_done_callback(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
         _unlock_nmf_from_alignment(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-    alignment_ctrl.on_aligned = _alignment_done_callback  # called by alignment when "Align curves" finishes
+    # alignment controller should call this when "Align curves" completes
+    alignment_ctrl.on_aligned = _alignment_done_callback
 except Exception:
     pass
 
-# ---------- Bridge NMF → Viz ----------
+# ---------- Bridge NMF → Viz/Diversity ----------
 def _nmf_done_callback(H_df: pd.DataFrame):
     _unlock_viz_diversity_after_nmf(H_df)
 
@@ -625,18 +648,16 @@ preproc_tab = pn.Column(
 TABS = pn.Tabs(
     ("Upload", upload_tab),
     ("Preprocess", preproc_tab),
-    ("Alignment", alignment_section),   # visible (anchors can be primed any time)
-    ("NMF", nmf_section),               # visible so users can load aligned CSV directly here
-    ("Diversity", diversity_section),   # enabled as soon as aligned data is present
-    ("Visualization", viz_section),     # enabled after NMF calculated
+    ("Alignment", alignment_section),
+    ("NMF", nmf_section),               # users may also import aligned CSV here
+    ("Diversity", diversity_section),
+    ("Visualization", viz_section),
     dynamic=True,
 )
+
 HEADER = pn.pane.Markdown("# CEtools — Electropherogram Pipeline", sizing_mode="stretch_width")
 app = pn.Column(HEADER, TABS, sizing_mode="stretch_width")
 app.servable(title="CEtools Pipeline")
 
 if __name__ == "__main__":
     pn.serve(app, title="CEtools Pipeline", show=True)
-
-
-
