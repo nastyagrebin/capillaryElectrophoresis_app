@@ -330,6 +330,17 @@ class NMFController:
             return io.BytesIO(b"")
         bio = io.BytesIO(); self.H_df.to_csv(bio); bio.seek(0); return bio
 
+    def preview_now(self) -> None:
+        """
+        Trigger a reconstruction preview using current controls.
+        Selects a default sample if none is selected.
+        """
+        # why: ensure preview works immediately after alignment
+        if (self.sample_select.value is None) and self.samples:
+            self.sample_select.value = self.samples[0]
+        # reuse existing logic
+        self._on_preview(None)
+
 
 def build_nmf_section():
     ctrl = NMFController()
