@@ -1,6 +1,6 @@
 # CEtools Electropherogram Pipeline
 
-Interactive Bokeh/Panel app for upload → preprocess → align → NMF → visualize → diversity.
+Interactive Bokeh/Panel app for upload → preprocess → align → NMF → alpha diversity → visualize.
 
 ## Quick start (fastest path)
 
