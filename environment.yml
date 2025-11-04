@@ -13,4 +13,4 @@ dependencies:
   - netCDF4
   - pip
   - pip:
-      - -e ./src          # installs CEtools package from the src/ folder
+ 
