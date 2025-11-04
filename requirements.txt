@@ -5,11 +5,4 @@ numpy
 scipy
 scikit-learn
 openpyxl
-io
-zipfile
-pathlib
-re
-tempfile
-contextlib
-dataclasses
-math
+netCDF4
