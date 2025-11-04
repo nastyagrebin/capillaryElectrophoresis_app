@@ -14,7 +14,7 @@ Interactive Bokeh/Panel app for upload → preprocess → align → NMF → alph
 
 4. Install the local CEtools package (from this repo):
    ```bash
-   pip install -e src/CEtools
+   pip install -e .
    ```
 5. Launch the app:
    ```bash
