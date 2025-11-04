@@ -1,3 +1,6 @@
+# ============================
+# FILE: app.py
+# ============================
 from __future__ import annotations
 import io, zipfile
 from pathlib import Path
@@ -48,15 +51,10 @@ class SessionState:
         self.converted_by_sample: Dict[str, pd.DataFrame] = {}
         self.merged_df: Optional[pd.DataFrame] = None
         self.last_fig: Optional[bokeh.plotting.Figure] = None
-        # pipeline dataset (what the next stage should see)
         self.current_by_sample: Dict[str, pd.DataFrame] = {}
-
-        # aligned data (from Alignment or CSV import via NMF tab)
         self.aligned_pseudotimes_df: Optional[pd.DataFrame] = None
         self.aligned_norm_df: Optional[pd.DataFrame] = None
         self.rows_are_traces_aligned: bool = False
-
-        # NMF loadings
         self.H_df: Optional[pd.DataFrame] = None
 
 state = SessionState()
@@ -121,7 +119,7 @@ merge_download = pn.widgets.FileDownload(
 )
 merge_name.param.watch(lambda e: setattr(merge_download, "filename", e.new or "merged.csv"), "value")
 
-# Preview plot + slider (no PNG/SVG exports)
+# Preview plot + slider
 plot_pane = pn.pane.Bokeh(height=420, sizing_mode="stretch_width")
 offset_slider = pn.widgets.FloatSlider(
     name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0,
@@ -174,7 +172,6 @@ def _on_upload_change(event):
     downloads_group.visible = False
     preview_group.visible = False
 
-    # keep alignment section visible
     try:
         alignment_section.visible = True
     except Exception:
@@ -246,7 +243,6 @@ def _on_convert_click(event):
         state.current_by_sample = {k: v.copy() for k, v in state.converted_by_sample.items()}
         _render_plot()
 
-        # Initialize preprocessing with current dataset and unlock despike
         _init_preprocess_from_current()
         _unlock_despike()
 
@@ -316,23 +312,22 @@ upload_tab = pn.Column(
     sizing_mode="stretch_width"
 )
 
-# ---------- Preprocess tab (assemble controllers) ----------
+# ---------- Preprocess tab ----------
 despike_section, despike_ctrl = build_despike_section()
 smooth_section,  smooth_ctrl  = build_smoothing_section()
 baseline_section, baseline_ctrl = build_baseline_section()
 norm_section,    norm_ctrl    = build_normalization_section()
 
-# hide downstream initially (revealed via unlockers)
 smooth_section.visible = False
 baseline_section.visible = False
 norm_section.visible = False
 
 # ---------- Alignment tab ----------
 alignment_section, alignment_ctrl = build_alignment_section()
-alignment_section.visible = True  # keep anchors UI present
+alignment_section.visible = True
 
 # ---------- NMF tab ----------
-nmf_section, nmf_ctrl = build_nmf_section()  # includes "Load aligned CSV" at top
+nmf_section, nmf_ctrl = build_nmf_section()  # includes CSV import & source toggle
 nmf_section.visible = True
 
 def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: bool):
@@ -424,7 +419,6 @@ def _unlock_alignment():
     alignment_section.visible = True
 
 def _force_unlock_nmf_controls():
-    """Try to enable all common NMF UI bits regardless of internal names."""
     for attr in ("import_btn", "preview_btn", "calc_btn", "apply_btn", "run_btn"):
         btn = getattr(nmf_ctrl, attr, None)
         try:
@@ -432,7 +426,6 @@ def _force_unlock_nmf_controls():
                 btn.disabled = False
         except Exception:
             pass
-    # If controller exposes a status/message pane, note the source
     for attr in ("status", "info", "message"):
         pane = getattr(nmf_ctrl, attr, None)
         try:
@@ -442,39 +435,40 @@ def _force_unlock_nmf_controls():
             pass
 
 def _unlock_nmf_from_alignment(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
-    # Persist to session
+    # Persist
     state.aligned_pseudotimes_df = pseudotimes_df.copy()
     state.aligned_norm_df = norm_df.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
 
-    # Feed into NMF controller and unlock UI
+    # Feed into NMF, select Alignment as source
     try:
-        nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-    except Exception:
-        # Back-compat: some versions use set_aligned_input(...)
+        # New API: stash as "alignment" and activate
+        nmf_ctrl.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
         try:
-            nmf_ctrl.set_aligned_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+            nmf_ctrl.source_select.value = "alignment"
+        except Exception:
+            pass
+    except Exception:
+        # Back-compat: older controllers
+        try:
+            nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
         except Exception:
             pass
 
     _force_unlock_nmf_controls()
-
     try:
         nmf_section.visible = True
-        # Optionally switch to NMF so user sees it's ready:
-        # TABS.active = 3
+        # Optionally: TABS.active = 3
     except Exception:
         pass
 
 def _unlock_viz_diversity_after_nmf(H_df: pd.DataFrame):
     state.H_df = H_df.copy()
-    # Viz
     try:
         viz_ctrl.set_input(H_df)
         viz_section.visible = True
     except Exception:
         pass
-    # Diversity: connect aligned inputs so user can compute either from aligned or from H
     try:
         if state.aligned_pseudotimes_df is not None and state.aligned_norm_df is not None:
             diversity_ctrl.set_input(
@@ -562,7 +556,6 @@ def _wire_baseline_skip():
     baseline_ctrl.skip_btn.on_click(_skip)
 
 def _init_preprocess_from_current():
-    """Push the current dataset (from Upload tab) into the first preprocess stage."""
     if not state.current_by_sample:
         return
     despike_ctrl.input_by_sample = {k: v.copy() for k, v in state.current_by_sample.items()}
@@ -577,14 +570,11 @@ def _init_preprocess_from_current():
         despike_ctrl.status.object = ok("Loaded data into Preprocessing → Despiking.")
     except Exception:
         pass
-    # hide downstream until advanced
     smooth_section.visible = False
     baseline_section.visible = False
     norm_section.visible = False
-    # alignment visible but waiting for data
     alignment_section.visible = True
 
-# Bind wiring for preprocess
 _wire_despike_apply()
 _wire_despike_skip()
 _wire_smooth_apply()
@@ -618,7 +608,6 @@ _wire_norm_apply_skip()
 try:
     def _alignment_done_callback(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
         _unlock_nmf_from_alignment(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-    # alignment controller should call this when "Align curves" completes
     alignment_ctrl.on_aligned = _alignment_done_callback
 except Exception:
     pass
@@ -649,7 +638,7 @@ TABS = pn.Tabs(
     ("Upload", upload_tab),
     ("Preprocess", preproc_tab),
     ("Alignment", alignment_section),
-    ("NMF", nmf_section),               # users may also import aligned CSV here
+    ("NMF", nmf_section),
     ("Diversity", diversity_section),
     ("Visualization", viz_section),
     dynamic=True,
@@ -661,3 +650,4 @@ app.servable(title="CEtools Pipeline")
 
 if __name__ == "__main__":
     pn.serve(app, title="CEtools Pipeline", show=True)
+
