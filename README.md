@@ -18,7 +18,7 @@ Interactive Bokeh/Panel app for upload → preprocess → align → NMF → alph
    ```
 5. Launch the app:
    ```bash
-   panel serve app/app.py --show
+   python app/app.py
 
 ### Option B: pip + venv (works if you have a working compiler toolchain)
 
