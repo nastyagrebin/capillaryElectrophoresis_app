@@ -1,0 +1,17 @@
+name: cetools-app
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - bokeh=3.1.1
+  - panel=1.0.2
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - openpyxl        # for reading .xlsx metadata
+  - pip
+  - pip:
+    # If CEtools is part of this repo as a subfolder (e.g., ./CEtools), leave it to the install step below
+    # If CEtools lives in another repo, you can also point pip at it, e.g.:
+    # - "git+https://github.com/yourname/CEtools.git@main"
