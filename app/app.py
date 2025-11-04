@@ -40,6 +40,73 @@ def _ensure_panel():
         pn.state._ce_panel_ready = True
 _ensure_panel()
 
+# ===== app.py (optional: after _ensure_panel, before building tabs) =====
+import uuid
+from copy import deepcopy
+
+def _snapshot_state_to_cache(key: str):
+    pn.state.cache[key] = dict(
+        converted_by_sample={k: v.copy() for k, v in state.converted_by_sample.items()},
+        current_by_sample={k: v.copy() for k, v in state.current_by_sample.items()},
+        aligned_pseudotimes_df=None if state.aligned_pseudotimes_df is None else state.aligned_pseudotimes_df.copy(),
+        aligned_norm_df=None if state.aligned_norm_df is None else state.aligned_norm_df.copy(),
+        rows_are_traces=state.rows_are_traces_aligned,
+        H_df=None if state.H_df is None else state.H_df.copy(),
+    )
+
+def _restore_state_from_cache(key: str):
+    snap = pn.state.cache.get(key)
+    if not snap: 
+        return False
+    state.converted_by_sample = {k: v.copy() for k, v in snap["converted_by_sample"].items()}
+    state.current_by_sample   = {k: v.copy() for k, v in snap["current_by_sample"].items()}
+    state.aligned_pseudotimes_df = None if snap["aligned_pseudotimes_df"] is None else snap["aligned_pseudotimes_df"].copy()
+    state.aligned_norm_df        = None if snap["aligned_norm_df"] is None else snap["aligned_norm_df"].copy()
+    state.rows_are_traces_aligned = bool(snap["rows_are_traces"])
+    state.H_df = None if snap["H_df"] is None else snap["H_df"].copy()
+    return True
+
+def _ensure_session_token():
+    if pn.state.location is None:
+        return None
+    qp = dict(pn.state.location.query_params)
+    sid = qp.get("sid", [None])[0]
+    if not sid:
+        sid = uuid.uuid4().hex[:8]
+        qp["sid"] = [sid]
+        pn.state.location.update(query_params=qp, replace=True)
+    return sid
+
+# On page load, try to restore:
+def _onload():
+    sid = _ensure_session_token()
+    if sid and _restore_state_from_cache(sid):
+        bridge_status.object = ok("Session restored from cache.")
+        # Optionally re-wire Alignment/NMF UI with restored data:
+        try:
+            if state.current_by_sample:
+                alignment_ctrl.set_input(state.current_by_sample)
+        except Exception:
+            pass
+
+pn.state.onload(_onload)
+
+# Call _snapshot_state_to_cache(sid) after key transitions:
+def _maybe_snapshot(note=""):
+    if pn.state.location is None:
+        return
+    sid = pn.state.location.query_params.get("sid", [None])[0]
+    if sid:
+        _snapshot_state_to_cache(sid)
+        bridge_status.object = ok(f"State saved {note}".strip())
+
+# Example call sites:
+# - end of _on_convert_click(), after building current_by_sample
+# - end of _wire_norm_apply_skip() _apply/_skip handlers
+# - end of _unlock_nmf_from_alignment()
+# - end of _nmf_done_callback()
+
+
 
 OK = "OK:"; WARN = "Warning:"
 def ok(m): return f"{OK} {m}"
@@ -345,7 +412,7 @@ alignment_section, alignment_ctrl = build_alignment_section()
 alignment_section.visible = True  # keep anchors UI present
 
 # ---------- NMF tab ----------
-nmf_section, nmf_ctrl = build_nmf_section()  # includes "Load aligned CSV" at top
+nmf_section, nmf_ctrl = build_nmf_section()  # includes CSV import & source toggle
 nmf_section.visible = True
 
 def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: bool):
@@ -353,6 +420,32 @@ def _nmf_aligned_imported(P: pd.DataFrame, Y: pd.DataFrame, rows_are_traces: boo
     state.aligned_norm_df = Y.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
 nmf_ctrl.on_aligned_imported = _nmf_aligned_imported
+
+
+def _unlock_nmf_from_alignment(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
+    # Persist
+    state.aligned_pseudotimes_df = pseudotimes_df.copy()
+    state.aligned_norm_df = norm_df.copy()
+    state.rows_are_traces_aligned = bool(rows_are_traces)
+
+    # Feed into NMF and **explicitly** select Alignment as source
+    try:
+        nmf_ctrl.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+        try:
+            nmf_ctrl.source_select.value = "alignment"  # token, not label
+        except Exception:
+            pass
+    except Exception:
+        try:
+            nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+        except Exception:
+            pass
+
+    _force_unlock_nmf_controls()
+    try:
+        nmf_section.visible = True
+    except Exception:
+        pass
 
 # ---------- Viz tab ----------
 viz_section, viz_ctrl = build_viz_section()
