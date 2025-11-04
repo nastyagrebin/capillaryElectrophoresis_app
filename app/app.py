@@ -470,8 +470,6 @@ def _on_tabs_active_changed(event):
     except Exception:
         pass
 
-TABS.param.watch(_on_tabs_active_changed, "active")
-
 # ---------- Viz tab ----------
 viz_section, viz_ctrl = build_viz_section()
 viz_section.visible = True
@@ -807,6 +805,8 @@ TABS = pn.Tabs(
     ("Visualization", viz_section),
     dynamic=True,
 )
+
+TABS.param.watch(_on_tabs_active_changed, "active")
 
 HEADER = pn.pane.Markdown("# CEtools — Electropherogram Pipeline", sizing_mode="stretch_width")
 app = pn.Column(
