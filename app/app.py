@@ -434,19 +434,42 @@ nmf_ctrl.on_aligned_imported = _nmf_aligned_imported
 
 # When Alignment finishes, still push into NMF eagerly (push path)
 def _unlock_nmf_from_alignment(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame, *, rows_are_traces: bool):
+    # Persist
     state.aligned_pseudotimes_df = pseudotimes_df.copy()
     state.aligned_norm_df = norm_df.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
+
+    # Feed into NMF, select Alignment as source
     try:
         nmf_ctrl.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-        try: nmf_ctrl.source_select.value = "alignment"
-        except Exception: pass
+        try:
+            nmf_ctrl.source_select.value = "alignment"  # ensure correct source is active
+        except Exception:
+            pass
+        # --- New: auto-generate preview using default params & default sample
+        try:
+            nmf_ctrl.preview_now()
+        except Exception:
+            # why: never let preview errors break the doc; NMF tab will show the warning
+            pass
     except Exception:
-        try: nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
-        except Exception: pass
+        # Back-compat fallback
+        try:
+            nmf_ctrl.set_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
+            try:
+                nmf_ctrl.preview_now()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     _force_unlock_nmf_controls()
-    try: nmf_section.visible = True
-    except Exception: pass
+    try:
+        nmf_section.visible = True
+        # optional: don't auto-switch tabs; user stays on Alignment and will find NMF pre-populated
+        # TABS.active = 3
+    except Exception:
+        pass
 
 # Hook alignment completion (if the controller exposes on_aligned)
 try:
