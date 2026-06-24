@@ -118,7 +118,7 @@ def nmf_group_importance_dashboard_stable(
 
     stats_pane = pn.pane.DataFrame(stats.reset_index(), height=260, sizing_mode="stretch_width")
 
-    from bokeh.palettes import Reds256, Blues256
+    from bokeh.palettes import Reds, Blues
     
     K = len(basis_cols)
     basis_indices = np.arange(1, K + 1)
@@ -155,9 +155,9 @@ def nmf_group_importance_dashboard_stable(
     
     if min_q_gt0 > 0 and (max_q / min_q_gt0) > 100:
         plot_low = max(1e-10, min(0.01, min_q_gt0))
-        cmap = LogColorMapper(palette=Reds256, low=plot_low, high=1.0)
+        cmap = LogColorMapper(palette=Reds[9], low=plot_low, high=1.0)
     else:
-        cmap = LinearColorMapper(palette=Reds256, low=0, high=max_q if max_q > 0 else 1.0)
+        cmap = LinearColorMapper(palette=Reds[9], low=0, high=max_q if max_q > 0 else 1.0)
 
     sig_fig = figure(
         width=800, height=200,
@@ -225,9 +225,9 @@ def nmf_group_importance_dashboard_stable(
     
     if min_p_gt0 > 0 and (max_p / min_p_gt0) > 100:
         plot_low_p = max(1e-10, min(0.01, min_p_gt0))
-        cmap_p = LogColorMapper(palette=Blues256, low=plot_low_p, high=1.0)
+        cmap_p = LogColorMapper(palette=Blues[9], low=plot_low_p, high=1.0)
     else:
-        cmap_p = LinearColorMapper(palette=Blues256, low=0, high=max_p if max_p > 0 else 1.0)
+        cmap_p = LinearColorMapper(palette=Blues[9], low=0, high=max_p if max_p > 0 else 1.0)
 
     pval_fig = figure(
         width=800, height=200,
