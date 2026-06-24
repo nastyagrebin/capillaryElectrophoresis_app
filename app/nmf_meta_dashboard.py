@@ -118,7 +118,7 @@ def nmf_group_importance_dashboard_stable(
 
     stats_pane = pn.pane.DataFrame(stats.reset_index(), height=260, sizing_mode="stretch_width")
 
-    from bokeh.palettes import Reds256
+    from bokeh.palettes import Reds256, Blues256
     
     K = len(basis_cols)
     basis_indices = np.arange(1, K + 1)
@@ -208,6 +208,66 @@ def nmf_group_importance_dashboard_stable(
 
     cbar = ColorBar(color_mapper=cmap, title="q-value", orientation="horizontal", padding=0)
     sig_fig.add_layout(cbar, 'below')
+
+    p_values = stats_sorted["p_value"].to_numpy()
+    p_values_clipped = np.clip(p_values, 1e-10, 1.0)
+    
+    sig_src_p = ColumnDataSource(data=dict(
+        basis_index=np.arange(1, K + 1),
+        p_value=p_values,
+        p_value_plot=p_values_clipped,
+        pseudotime=pseudotimes,
+        basis_name=stats_sorted["basis"].to_numpy()
+    ))
+    
+    max_p = float(np.max(p_values))
+    min_p_gt0 = float(np.min(p_values[p_values > 0]) if np.any(p_values > 0) else 1e-10)
+    
+    if min_p_gt0 > 0 and (max_p / min_p_gt0) > 100:
+        plot_low_p = max(1e-10, min(0.01, min_p_gt0))
+        cmap_p = LogColorMapper(palette=Blues256, low=plot_low_p, high=1.0)
+    else:
+        cmap_p = LinearColorMapper(palette=Blues256, low=0, high=max_p if max_p > 0 else 1.0)
+
+    pval_fig = figure(
+        width=800, height=200,
+        title=f"NMF Basis Significance (p-value, {group_col})",
+        x_axis_label="Pseudotime",
+        tools="hover,save,pan,wheel_zoom,box_zoom,reset",
+        toolbar_location="above",
+        active_scroll=None,
+        x_range=sig_fig.x_range,
+        y_range=Range1d(-1, 1)
+    )
+    if svg_export_mode:
+        pval_fig.output_backend = "svg"
+    pval_fig.yaxis.visible = False
+    pval_fig.ygrid.visible = False
+    pval_fig.extra_x_ranges = {"basis": basis_range}
+    pval_fig.x_range.js_on_change('start', callback)
+    pval_fig.x_range.js_on_change('end', callback)
+    
+    basis_axis_p = LinearAxis(x_range_name="basis", axis_label="Basis Number")
+    pval_fig.add_layout(basis_axis_p, 'above')
+    
+    pval_fig.rect(
+        x="pseudotime", y=0, width=pt_spacing * 0.9, height=1.8,
+        source=sig_src_p,
+        fill_color={"field": "p_value_plot", "transform": cmap_p},
+        line_color="lightgrey",
+        line_width=1
+    )
+    
+    hover_p = pval_fig.select(dict(type=HoverTool))[0]
+    hover_p.tooltips = [
+        ("Basis", "@basis_name (@basis_index)"),
+        ("p-value", "@p_value{%0.2e}"),
+        ("Pseudotime", "@pseudotime{0.00}")
+    ]
+    hover_p.formatters = {"@p_value": "printf"}
+
+    cbar_p = ColorBar(color_mapper=cmap_p, title="p-value", orientation="horizontal", padding=0)
+    pval_fig.add_layout(cbar_p, 'below')
 
     # Add Reconstruction Figure
     recon_fig = figure(
@@ -299,6 +359,7 @@ def nmf_group_importance_dashboard_stable(
         pn.Row(recon_sample_sel),
         pn.Row(pn.pane.Bokeh(recon_fig), sizing_mode="stretch_width"),
         pn.Row(pn.pane.Bokeh(sig_fig), sizing_mode="stretch_width"),
+        pn.Row(pn.pane.Bokeh(pval_fig), sizing_mode="stretch_width"),
         pn.layout.Divider(),
         pn.Row(basis_sel),
         pn.Row(pn.pane.Bokeh(jitter_fig), sizing_mode="stretch_width"),
