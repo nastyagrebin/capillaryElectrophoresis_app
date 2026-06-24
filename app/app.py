@@ -179,6 +179,18 @@ upload_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=Fal
 downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(zip_name, zip_download), pn.Row(merge_name, merge_download), merge_status, visible=False, sizing_mode="stretch_width")
 preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle, upload_svg_export), plot_pane, visible=False, sizing_mode="stretch_width")
 
+import importlib.metadata
+try:
+    from version import APP_VERSION
+except Exception:
+    APP_VERSION = "vUnknown"
+
+def _get_pkg_version(pkg_name: str) -> str:
+    try:
+        return importlib.metadata.version(pkg_name)
+    except Exception:
+        return "Not installed"
+
 def _on_upload_change(event):
     files = []
     if isinstance(upload.value, (bytes, bytearray)):
@@ -201,9 +213,16 @@ def _on_upload_change(event):
     state.current_by_sample = {}
     
     import datetime
+    import sys
     state.session_log.clear()
     state.session_log["General"] = {
-        "App Version": "1.0.0 (Placeholder)",
+        "App Version": APP_VERSION,
+        "Python Version": sys.version.split()[0],
+        "Panel Version": _get_pkg_version("panel"),
+        "Bokeh Version": _get_pkg_version("bokeh"),
+        "Pandas Version": _get_pkg_version("pandas"),
+        "Numpy Version": _get_pkg_version("numpy"),
+        "SciPy Version": _get_pkg_version("scipy"),
         "Session Date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Uploaded Files": [f[0] for f in files]
     }
@@ -769,7 +788,7 @@ def _on_tab_change(event):
 
 TABS.param.watch(_on_tab_change, "active")
 
-HEADER = pn.pane.Markdown("# CEtools — Electropherogram Pipeline", sizing_mode="stretch_width")
+HEADER = pn.pane.Markdown(f"# CEtools — Electropherogram Pipeline ({APP_VERSION})", sizing_mode="stretch_width")
 app = pn.Column(HEADER, bridge_status, TABS, sizing_mode="stretch_width")
 app.servable(title="CEtools Pipeline")
 

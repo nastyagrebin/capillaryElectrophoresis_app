@@ -1,6 +1,16 @@
 # CEtools Electropherogram Pipeline
+**Current Version:** `v2.0.0`
 
 Interactive Bokeh/Panel app for upload → preprocess → align → NMF → alpha diversity → visualize.
+
+## Updating the App (For Git Users)
+If you downloaded the app by cloning the repository with Git, you can update to the newest version instantly without re-downloading anything.
+1. Open a terminal inside the `capillaryElectrophoresis_app` folder.
+2. Run the following command to download the latest updates:
+   ```bash
+   git pull origin main
+   ```
+3. Run the app as normal!
 
 ## Quick start (fastest path)
 
