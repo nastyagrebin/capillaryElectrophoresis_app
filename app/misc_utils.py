@@ -45,13 +45,14 @@ class MiscController:
         self.merge_btn = pn.widgets.Button(name="Merge Uploaded Data", button_type="primary")
         self.merge_btn.on_click(self._on_merge)
         
-        self.visualize_btn = pn.widgets.Button(name="Visualize", button_type="success")
-        self.visualize_btn.on_click(self._on_visualize)
+        self.svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
         
         self.preview_pane = pn.pane.DataFrame(pd.DataFrame(), max_height=200, sizing_mode="stretch_width", visible=False)
         self.status = pn.pane.Markdown("")
         
         # Continuous vs Continuous
+        self.cvc_btn = pn.widgets.Button(name="Visualize", button_type="success")
+        self.cvc_btn.on_click(self._update_cvc)
         self.cvc_x = pn.widgets.Select(name="X (Continuous)", options=[], width=150)
         self.cvc_y = pn.widgets.Select(name="Y (Continuous)", options=[], width=150)
         self.cvc_color = pn.widgets.Select(name="Color by", options=[], width=150)
@@ -61,15 +62,24 @@ class MiscController:
         
         self.cvc_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=600, height=400)
         self.cvc_stats_pane = pn.pane.Markdown("")
+        
         # Categorical vs Continuous
+        self.cat_btn = pn.widgets.Button(name="Visualize", button_type="success")
+        self.cat_btn.on_click(self._update_cat)
         self.cat_x = pn.widgets.Select(name="X (Categorical)", options=[], width=150)
         self.cat_y = pn.widgets.Select(name="Y (Continuous)", options=[], width=150)
         self.cat_stat = pn.widgets.RadioButtonGroup(name="Test", options=["mann-whitney", "kruskal-wallis"], value="kruskal-wallis")
         self.cat_fdr = pn.widgets.Checkbox(name="FDR Correction", value=True)
         
         self.cat_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=600, height=400)
+
+        # Regression Matrix
+        self.reg_btn = pn.widgets.Button(name="Visualize", button_type="success")
+        self.reg_btn.on_click(self._update_reg)
+        self.reg_vars = pn.widgets.MultiChoice(name="Variables to correlate", options=[], width=500)
+        self.reg_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=850, height=600)
+        self.reg_status = pn.pane.Markdown("")
         
-        # Removed param.watch bindings to allow manual Visualize button trigger
         self.section = pn.Column(
             pn.pane.Markdown("## Miscellaneous Visualizations\nUpload standalone files, or let the session automatically bridge generated data here."),
             pn.pane.Markdown("### 1. Manual Data Upload"),
@@ -81,23 +91,24 @@ class MiscController:
             pn.Row(self.merge_btn, self.status),
             self.preview_pane,
             pn.layout.Divider(),
-            pn.Row(self.visualize_btn),
+            pn.Row(self.svg_export),
             pn.pane.Markdown("### Continuous vs Continuous"),
             pn.Row(self.cvc_x, self.cvc_y, self.cvc_color, pn.Column("Color mode:", self.cvc_color_mode)),
-            pn.Row(self.cvc_corr, self.cvc_reg),
+            pn.Row(self.cvc_corr, self.cvc_reg, pn.Spacer(width=12), self.cvc_btn),
             self.cvc_stats_pane,
             self.cvc_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Categorical vs Continuous"),
             pn.Row(self.cat_x, self.cat_y),
-            pn.Row(self.cat_stat, self.cat_fdr),
+            pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn),
             self.cat_plot_pane,
+            pn.layout.Divider(),
+            pn.pane.Markdown("### Regression Matrix"),
+            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_btn),
+            self.reg_status,
+            self.reg_plot_pane,
             sizing_mode="stretch_width"
         )
-
-    def _on_visualize(self, event):
-        self._update_cvc()
-        self._update_cat()
 
     def _read_file(self, file_input):
         if not file_input.value: return None
@@ -168,6 +179,9 @@ class MiscController:
         
         self.cat_x.options = cols
         self.cat_y.options = num_cols
+
+        self.reg_vars.options = num_cols
+        self.reg_vars.value = [c for c in num_cols if "basis" not in str(c).lower()]
         
         if num_cols:
             self.cvc_x.value = num_cols[0]
@@ -180,7 +194,10 @@ class MiscController:
 
     def _update_cvc(self, *_):
         self.cvc_plot_pane.object = None
-        if self.master_df is None or not self.cvc_x.value or not self.cvc_y.value:
+        if self.master_df is None or self.master_df.empty:
+            self.cvc_stats_pane.object = "**Error: No data available.**"
+            return
+        if not self.cvc_x.value or not self.cvc_y.value:
             return
             
         x_col = self.cvc_x.value
@@ -218,7 +235,8 @@ class MiscController:
         
         p_fig = figure(width=400, height=400, title=f"{y_col} vs {x_col}",
                        x_axis_label=x_col, y_axis_label=y_col,
-                       tools="pan,wheel_zoom,box_zoom,reset,save")
+                       tools="pan,wheel_zoom,box_zoom,reset,save",
+                       output_backend="svg" if self.svg_export.value else "canvas")
                        
         if color_col == "None":
             p_fig.circle(x, y, size=8, alpha=0.7)
@@ -230,11 +248,11 @@ class MiscController:
                 is_cont = True
                 
             if is_cont:
-                from bokeh.palettes import Viridis256
+                from bokeh.palettes import Magma256
                 valid_c = c_vals.dropna()
                 c_min = valid_c.min() if len(valid_c) > 0 else 0
                 c_max = valid_c.max() if len(valid_c) > 0 else 1
-                mapper = LinearColorMapper(palette=Viridis256, low=c_min, high=c_max)
+                mapper = LinearColorMapper(palette=Magma256, low=c_min, high=c_max)
                 src = ColumnDataSource(dict(x=x, y=y, c=c_vals))
                 p_fig.circle("x", "y", size=8, alpha=0.7, fill_color={"field": "c", "transform": mapper}, line_color=None, source=src)
                 bar = ColorBar(color_mapper=mapper, title=color_col)
@@ -242,20 +260,31 @@ class MiscController:
             else:
                 c_vals = c_vals.astype(str)
                 unique = sorted(c_vals.unique())
-                from bokeh.palettes import Category10, Viridis256
-                palette = list(Category10[10]) if len(unique) <= 10 else [Viridis256[i] for i in np.linspace(0, 255, len(unique), dtype=int)]
+                from bokeh.palettes import Category10, Magma256
+                palette = list(Category10[10]) if len(unique) <= 10 else [Magma256[i] for i in np.linspace(0, 255, len(unique), dtype=int)]
                 cmap = {c: palette[i%len(palette)] for i, c in enumerate(unique)}
                 
+                from bokeh.models import Legend, LegendItem
+                color_items = []
                 for c in unique:
                     mask = (c_vals == c).values
                     src = ColumnDataSource(dict(x=x[mask], y=y[mask]))
-                    p_fig.circle("x", "y", size=8, alpha=0.7, fill_color=cmap[c], line_color=None, source=src, legend_label=str(c)[:12])
+                    renderer = p_fig.circle("x", "y", size=8, alpha=0.7, fill_color=cmap[c], line_color=None, source=src)
+                    color_items.append(LegendItem(label=str(c)[:12], renderers=[renderer]))
+                
+                if color_items:
+                    color_legend = Legend(items=color_items, click_policy="hide")
+                    p_fig.add_layout(color_legend, "right")
 
         if self.cvc_reg.value and len(x) > 2:
             slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
             x_seq = np.linspace(x.min(), x.max(), 100)
             y_seq = intercept + slope * x_seq
-            p_fig.line(x_seq, y_seq, color='red', line_width=2, legend_label='Regression')
+            if self.cvc_corr.value == "pearson":
+                reg_label = f"Regression (r={r:.3f}, p={p:.3e})"
+            else:
+                reg_label = f"Regression (rho={r:.3f}, p={p:.3e})"
+            reg_renderer = p_fig.line(x_seq, y_seq, color='red', line_width=2)
             
             n = len(x)
             if n > 2:
@@ -273,18 +302,18 @@ class MiscController:
                     np.append(y_ci_lower, y_ci_upper[::-1]),
                     color='red', alpha=0.2, line_width=0
                 )
-
-        if p_fig.legend:
-            p_fig.legend.click_policy = "hide"
-            try:
-                p_fig.add_layout(p_fig.legend[0], "right")
-            except Exception:
-                pass
+            
+            from bokeh.models import Legend, LegendItem
+            reg_legend = Legend(items=[LegendItem(label=reg_label, renderers=[reg_renderer])], click_policy="hide")
+            p_fig.add_layout(reg_legend, "below")
 
         self.cvc_plot_pane.object = p_fig
 
     def _update_cat(self, *_):
-        if self.master_df is None or not self.cat_x.value or not self.cat_y.value:
+        self.cat_plot_pane.object = None
+        if self.master_df is None or self.master_df.empty:
+            return
+        if not self.cat_x.value or not self.cat_y.value:
             return
             
         x_col = self.cat_x.value
@@ -339,7 +368,8 @@ class MiscController:
             
         import math
         p_fig = figure(width=600, height=400, title=f"{y_col} by {x_col}",
-                       tools="pan,wheel_zoom,box_zoom,reset,save")
+                       tools="pan,wheel_zoom,box_zoom,reset,save",
+                       output_backend="svg" if self.svg_export.value else "canvas")
                        
         p_fig.xaxis.ticker = list(range(len(groups)))
         p_fig.xaxis.major_label_overrides = {i: g for i, g in enumerate(groups)}
@@ -372,6 +402,66 @@ class MiscController:
             current_y += step
             
         self.cat_plot_pane.object = p_fig
+
+    def _update_reg(self, *_):
+        from bokeh.models import LinearColorMapper, HoverTool, ColorBar
+        from bokeh.plotting import figure
+        from scipy import stats
+        import math
+        
+        if self.master_df is None or self.master_df.empty:
+            self.reg_status.object = "**Error: No data available.**"
+            return
+            
+        vars = self.reg_vars.value
+        if not vars or len(vars) < 2:
+            self.reg_status.object = "**Error: Please select at least two variables.**"
+            return
+            
+        data = []
+        for i, v1 in enumerate(vars):
+            for j, v2 in enumerate(vars):
+                if i > j: # Half square (lower triangle)
+                    df_pair = self.master_df[[v1, v2]].dropna()
+                    if len(df_pair) < 3:
+                        data.append({'var1': v1, 'var2': v2, 'r': np.nan, 'p': np.nan})
+                        continue
+                    try:
+                        res = stats.linregress(df_pair[v2], df_pair[v1])
+                        data.append({'var1': v1, 'var2': v2, 'r': res.rvalue, 'p': res.pvalue})
+                    except Exception:
+                        data.append({'var1': v1, 'var2': v2, 'r': np.nan, 'p': np.nan})
+                        
+        plot_df = pd.DataFrame(data)
+        
+        from bokeh.palettes import RdBu
+        cmap = LinearColorMapper(palette=list(reversed(RdBu[11])), low=-1.0, high=1.0, nan_color="lightgray")
+        
+        p = figure(title="Regression Matrix (r-value)",
+                   x_range=vars[:-1], y_range=list(reversed(vars[1:])),
+                   x_axis_location="above", width=850, height=600,
+                   tools="hover,save,pan,wheel_zoom,box_zoom,reset", toolbar_location="right")
+                   
+        p.xaxis.major_label_orientation = math.pi / 4
+        
+        p.rect(x="var2", y="var1", width=1, height=1, source=plot_df,
+               line_color="white", fill_color={"field": "r", "transform": cmap})
+               
+        hover = p.select_one(HoverTool)
+        hover.tooltips = [
+            ("Pair", "@var1 vs @var2"),
+            ("r", "@r{0.000}"),
+            ("p-value", "@p{0.00e-0}")
+        ]
+        
+        color_bar = ColorBar(color_mapper=cmap, width=8, location=(0,0))
+        p.add_layout(color_bar, 'right')
+        
+        if self.svg_export.value:
+            p.output_backend = "svg"
+            
+        self.reg_plot_pane.object = p
+        self.reg_status.object = ""
 
 def build_misc_section():
     ctrl = MiscController()

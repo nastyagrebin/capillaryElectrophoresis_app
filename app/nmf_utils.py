@@ -71,12 +71,14 @@ class NMFController:
         self.pseudo_used_df: Optional[pd.DataFrame] = None
 
         # Callbacks
-        self.on_done: Optional[Callable[[pd.DataFrame], None]] = None
+        self.on_done: Optional[Callable[[pd.DataFrame, Optional[np.ndarray]], None]] = None
         self.on_aligned_imported: Optional[Callable[[pd.DataFrame, pd.DataFrame, bool], None]] = None
 
         # ---------- Controls ----------
         self.k_slider = pn.widgets.IntSlider(name="K (number of basis)", start=20, end=500, value=250, step=5, width=260)
         self.l2_input = pn.widgets.FloatInput(name="L2 (ridge)", value=1e-5, step=1e-5, start=0.0, width=160)
+        self.roi_lo = pn.widgets.FloatInput(name="ROI start (t)", value=0.0, step=0.01, width=120)
+        self.roi_hi = pn.widgets.FloatInput(name="ROI end (t)", value=1.0, step=0.01, width=120)
         self.sample_select = pn.widgets.Select(name="Sample for preview", options=[], value=None, width=260)
         self.exclude_group = pn.widgets.CheckBoxGroup(name="Samples to Exclude", options=[], value=[], inline=True)
         self.preview_btn = pn.widgets.Button(name="Preview reconstruction", button_type="success", disabled=True)
@@ -121,7 +123,7 @@ class NMFController:
             *csv_block,
             pn.pane.Markdown("### Sample Management"),
             pn.Column(pn.pane.Markdown("Check samples to **exclude** from NMF:"), self.exclude_group, sizing_mode="stretch_width", styles={'background': '#f9f9f9', 'padding': '10px', 'border-radius': '5px'}),
-            pn.Row(self.k_slider, pn.Spacer(width=12), self.l2_input, pn.Spacer(width=12), self.sample_select),
+            pn.Row(self.k_slider, pn.Spacer(width=12), self.l2_input, pn.Spacer(width=12), self.roi_lo, pn.Spacer(width=12), self.roi_hi, pn.Spacer(width=12), self.sample_select),
             pn.Row(self.preview_btn, pn.Spacer(width=12), self.calc_btn),
             self.recon_pane,
             pn.layout.Divider(),
@@ -241,11 +243,13 @@ class NMFController:
             K = int(self.k_slider.value); l2 = float(self.l2_input.value)
             H_df, Phi, centers, pseudo_used_df = cet.fit_continuous_basis_loadings_from_dataframes(
                 P_sub, Y_sub, K=K, l2=l2, rows_are_traces=self.rows_are_traces,
+                mask_range=(self.roi_lo.value, self.roi_hi.value)
             )
             fig = cet.plot_reconstruction_overlays_bokeh(
                 str(self.sample_select.value), H_df, Phi,
                 pseudotimes_df=P_sub, norm_df=Y_sub,
-                rows_are_traces=self.rows_are_traces, title_prefix="Sample"
+                rows_are_traces=self.rows_are_traces, title_prefix="Sample",
+                mask_range=(self.roi_lo.value, self.roi_hi.value)
             )
             try: fig.toolbar.active_scroll = None
             except Exception: pass
@@ -278,13 +282,14 @@ class NMFController:
             K = int(self.k_slider.value); l2 = float(self.l2_input.value)
             H_df, Phi, centers, pseudo_used_df = cet.fit_continuous_basis_loadings_from_dataframes(
                 P_sub, Y_sub, K=K, l2=l2, rows_are_traces=self.rows_are_traces,
+                mask_range=(self.roi_lo.value, self.roi_hi.value)
             )
             self.H_df, self.Phi, self.centers, self.pseudo_used_df = H_df, Phi, centers, pseudo_used_df
 
             try:
-                _, _, _, fig = cet.plot_loadings_heatmap_clustered_bokeh(H_df, title="NMF loadings (clustered rows)")
+                _, _, _, fig = cet.plot_loadings_heatmap_clustered_bokeh(H_df, centers=centers, title="NMF loadings (clustered rows)")
             except Exception:
-                _ = cet.plot_loadings_heatmap_bokeh(H_df); fig = bokeh.plotting.gcf()
+                fig, _ = cet.plot_loadings_heatmap_bokeh(H_df, centers=centers)
             try: fig.toolbar.active_scroll = None
             except Exception: pass
             self.heatmap_pane.object = fig
@@ -292,7 +297,7 @@ class NMFController:
             self.csv_download.disabled = False
             self.status.object = ok("NMF loadings calculated.")
             if callable(self.on_done):
-                try: self.on_done(self.H_df)
+                try: self.on_done(self.H_df, self.centers)
                 except Exception: pass
         except Exception as e:
             self.heatmap_pane.object = None

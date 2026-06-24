@@ -342,8 +342,11 @@ def heuristic_sigma_from_centers(centers: np.ndarray) -> np.ndarray:
 
 def _try_scipy_nnls(A: np.ndarray, b: np.ndarray) -> Optional[np.ndarray]:
     try:
+        import warnings
         from scipy.optimize import nnls
-        x, _ = nnls(A, b)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            x, _ = nnls(A, b)
         return x
     except Exception:
         return None
@@ -392,13 +395,17 @@ def fit_continuous_basis_loadings_from_dataframes(
         raise ValueError(f"Shape mismatch: pseudotimes {P.shape} vs norm_df {Y.shape}")
     n_traces, _ = P.shape
 
+    lo, hi = mask_range
     if centers is None:
-        centers = default_gaussian_centers(K)
+        if lo < hi:
+            centers = np.linspace(lo, hi, K)
+        else:
+            centers = default_gaussian_centers(K)
+            
     if sigma is None:
         sigma = heuristic_sigma_from_centers(centers)
     Phi = make_gaussian_basis(centers, sigma)
 
-    lo, hi = mask_range
     H = np.zeros((n_traces, K), dtype=float)
     pseudo_used = np.full_like(P, np.nan, dtype=float)
 
@@ -409,6 +416,11 @@ def fit_continuous_basis_loadings_from_dataframes(
         if not np.any(m):
             continue
         A = Phi(t[m])
+        
+        # Prevent numerical overflow from practically zero activations
+        max_A = np.max(A, axis=0)
+        A[:, max_A < 1e-10] = 0.0
+        
         h = _try_scipy_nnls(A, y[m]) if use_scipy else None
         if h is None:
             h = nnls_projected_grad(A, y[m], l2=float(l2))
@@ -464,7 +476,7 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
             s_labels.append(s); c_labels.append(c)
 
     mapper = bokeh.models.LinearColorMapper(
-        palette=bokeh.palettes.Viridis256,
+        palette=bokeh.palettes.Magma256,
         low=float(np.nanmin(vals)),
         high=float(np.nanmax(vals))
     )
@@ -487,6 +499,15 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
     p.yaxis.ticker = bokeh.models.FixedTicker(ticks=list(range(n_rows)))
     p.yaxis.major_label_overrides = {i: samples[i] for i in range(n_rows)}
 
+    if centers is not None and len(centers) == n_cols:
+        pt_min, pt_max = float(np.min(centers)), float(np.max(centers))
+        pt_margin = ((pt_max - pt_min) / max(1, n_cols - 1)) / 2 if n_cols > 1 else 0.1
+        p.extra_x_ranges = {"pseudotime": bokeh.models.Range1d(start=pt_min - pt_margin, end=pt_max + pt_margin)}
+        pt_axis = bokeh.models.LinearAxis(x_range_name="pseudotime", axis_label="Pseudotime (centers)")
+        p.add_layout(pt_axis, 'above')
+        p.xaxis.axis_label = "Basis Number"
+
+
     color_bar = bokeh.models.ColorBar(
         title="loading weight",
         color_mapper=mapper,
@@ -497,12 +518,12 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
     p.add_layout(color_bar, "right")
     p.hover.tooltips = [("sample", "@sample"), ("component", "@comp"), ("z", "@val{0.00}")]
 
-    bokeh.plotting.show(p)
-    return Z
+    return p, Z
 
 
 def plot_loadings_heatmap_clustered_bokeh(
     H_df: pd.DataFrame,
+    centers: Optional[np.ndarray] = None,
     *,
     zscore_cols: bool = True,
     metric_rows: str = "cosine",
@@ -515,7 +536,7 @@ def plot_loadings_heatmap_clustered_bokeh(
     import bokeh.plotting
     from bokeh.models import (ColumnDataSource, LinearColorMapper, ColorBar,
                               FixedTicker, PrintfTickFormatter)
-    from bokeh.palettes import Viridis256
+    from bokeh.palettes import Magma256
     from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import pairwise_distances
 
@@ -575,7 +596,7 @@ def plot_loadings_heatmap_clustered_bokeh(
     if vmin == vmax:
         vmin -= 1e-12; vmax += 1e-12
 
-    mapper = LinearColorMapper(palette=Viridis256, low=vmin, high=vmax)
+    mapper = LinearColorMapper(palette=Magma256, low=vmin, high=vmax)
     src = ColumnDataSource(dict(x=xs, y=ys, val=vals, sample=s_labels, comp=c_labels))
 
     width = max(500, min(3 * n_cols, 1400))
@@ -611,13 +632,18 @@ def plot_reconstruction_overlays_bokeh(
     rows_are_traces: bool = True,
     n_eval: int = 1000,
     title_prefix: str = "Sample",
+    mask_range: Tuple[float, float] = (0.0, 1.0),
 ):
     import bokeh.plotting
 
     if sample_name not in H_df.index:
         raise KeyError(f"sample '{sample_name}' not found in H_df.index")
 
-    t_eval = np.linspace(0.0, 1.0, int(n_eval))
+    lo, hi = mask_range
+    if lo >= hi:
+        lo, hi = 0.0, 1.0
+        
+    t_eval = np.linspace(lo, hi, int(n_eval))
     A_eval = Phi(t_eval)
 
     i = int(H_df.index.get_loc(sample_name))
@@ -628,7 +654,7 @@ def plot_reconstruction_overlays_bokeh(
         height=400, width=600,
         title=f"{title_prefix} {sample_name}: reconstruction",
         x_axis_label="Pseudotime", y_axis_label="Intensity",
-        x_range=[0.0, 1.0],
+        x_range=[lo, hi],
     )
 
     if pseudotimes_df is not None and norm_df is not None:
@@ -680,7 +706,7 @@ def scatter_pca_from_loadings_bokeh(
     import bokeh.io
     import bokeh.models
     import bokeh.plotting
-    from bokeh.palettes import Category10, Category20, Viridis256
+    from bokeh.palettes import Category10, Category20, Magma256
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
 
@@ -748,7 +774,7 @@ def scatter_pca_from_loadings_bokeh(
                 palette = list(Category20[20])
             else:
                 idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                palette = [Viridis256[i] for i in idxs]
+                palette = [Magma256[i] for i in idxs]
             cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
             source_data[color_field] = [cmap[c] for c in cats]
             source_data["category"] = cats
@@ -765,7 +791,7 @@ def scatter_pca_from_loadings_bokeh(
             vmax = float(np.nanmax(vals)) if np.isfinite(vals).any() else 1.0
             if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
                 vmin, vmax = 0.0, 1.0
-            mapper = bokeh.models.LinearColorMapper(palette=Viridis256, low=vmin, high=vmax, nan_color="lightgray")
+            mapper = bokeh.models.LinearColorMapper(palette=Magma256, low=vmin, high=vmax, nan_color="lightgray")
             source_data["meta_value"] = vals
             title_suffix = " — colored by value"
 
@@ -864,7 +890,7 @@ def scatter_embed_bokeh(
     import bokeh.io
     import bokeh.models
     import bokeh.plotting
-    from bokeh.palettes import Category10, Category20, Viridis256
+    from bokeh.palettes import Category10, Category20, Magma256
 
     labels = [str(l) for l in labels]
     x, y = X2[:, 0], X2[:, 1]
@@ -895,7 +921,7 @@ def scatter_embed_bokeh(
                 palette = list(Category20[20])
             else:
                 idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                palette = [Viridis256[i] for i in idxs]
+                palette = [Magma256[i] for i in idxs]
             cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
             colors = [cmap[c] for c in cats]
             src_dict["category"] = cats
@@ -914,7 +940,7 @@ def scatter_embed_bokeh(
             vmax = float(np.nanmax(vals)) if np.isfinite(vals).any() else 1.0
             if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
                 vmin, vmax = 0.0, 1.0
-            mapper = bokeh.models.LinearColorMapper(palette=Viridis256, low=vmin, high=vmax, nan_color="lightgray")
+            mapper = bokeh.models.LinearColorMapper(palette=Magma256, low=vmin, high=vmax, nan_color="lightgray")
             src_dict["value"] = vals
             color_spec = {"field": "value", "transform": mapper}
             title_suffix = " — colored by value"

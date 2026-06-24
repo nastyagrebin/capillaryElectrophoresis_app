@@ -4,7 +4,7 @@ import io
 import numpy as np
 import pandas as pd
 import panel as pn
-from bokeh.models import ColumnDataSource, HoverTool
+from bokeh.models import ColumnDataSource, HoverTool, Range1d, LinearAxis, LogColorMapper, LinearColorMapper, CustomJSTickFormatter, ColorBar, CustomJS
 from bokeh.plotting import figure
 
 def _coerce_sid(x: pd.Series) -> pd.Series:
@@ -36,6 +36,8 @@ def nmf_group_importance_dashboard_stable(
     meta_sample_col: str = "sample",
     nmf_sample_col: str = "sample_id",
     min_group_size: int = 3,
+    roi_range: tuple[float, float] = (0.0, 1.0),
+    svg_export_mode: bool = False,
 ) -> pn.Column:
     from scipy.stats import kruskal  # type: ignore
 
@@ -99,13 +101,150 @@ def nmf_group_importance_dashboard_stable(
     stats["q_value"] = _bh_fdr(stats["p_value"].to_numpy())
     stats = stats.sort_values(["q_value", "p_value"], ascending=[True, True])
 
-    # ---------------- UI ----------------
-    basis_sel = pn.widgets.Select(name="Inspect basis", options=list(stats.index[: min(25, len(stats))]), width=220)
+    all_bases_numerical = stats.sort_values("basis_index").index.tolist()
+    most_significant = stats.index[0]
+    basis_sel = pn.widgets.Select(name="Inspect basis", options=all_bases_numerical, value=most_significant, width=220)
 
-    # panes/figures created ONCE
+    sio = io.StringIO()
+    stats.to_csv(sio)
+    sio.seek(0)
+    download_btn = pn.widgets.FileDownload(
+        file=sio, 
+        filename="nmf_group_stats.csv", 
+        button_type="success", 
+        name="Download Stats CSV",
+        width=200
+    )
+
     stats_pane = pn.pane.DataFrame(stats.reset_index(), height=260, sizing_mode="stretch_width")
 
-    # per-basis loadings jitter figure
+    from bokeh.palettes import Reds256
+    
+    K = len(basis_cols)
+    basis_indices = np.arange(1, K + 1)
+    stats_sorted = stats.reset_index().sort_values("basis_index")
+    q_values = stats_sorted["q_value"].to_numpy()
+    q_values_clipped = np.clip(q_values, 1e-10, 1.0)
+    
+    lo, hi = roi_range
+    K = len(basis_cols)
+    pseudotimes = np.linspace(lo, hi, K)
+
+    import CEtools as cet
+    if lo < hi:
+        centers = np.linspace(lo, hi, K)
+    else:
+        centers = cet.default_gaussian_centers(K)
+    sigma = cet.heuristic_sigma_from_centers(centers)
+    Phi = cet.make_gaussian_basis(centers, sigma)
+
+    pt_min, pt_max = pseudotimes.min(), pseudotimes.max()
+    pt_spacing = (pt_max - pt_min) / max(1, K - 1) if K > 1 else 0.1
+    pt_margin = pt_spacing / 2
+
+    sig_src = ColumnDataSource(data=dict(
+        basis_index=np.arange(1, K + 1),
+        q_value=q_values,
+        q_value_plot=q_values_clipped,
+        pseudotime=pseudotimes,
+        basis_name=stats_sorted["basis"].to_numpy()
+    ))
+
+    max_q = float(np.max(q_values))
+    min_q_gt0 = float(np.min(q_values[q_values > 0]) if np.any(q_values > 0) else 1e-10)
+    
+    if min_q_gt0 > 0 and (max_q / min_q_gt0) > 100:
+        plot_low = max(1e-10, min(0.01, min_q_gt0))
+        cmap = LogColorMapper(palette=Reds256, low=plot_low, high=1.0)
+    else:
+        cmap = LinearColorMapper(palette=Reds256, low=0, high=max_q if max_q > 0 else 1.0)
+
+    sig_fig = figure(
+        width=800, height=200,
+        title=f"NMF Basis Significance ({group_col})",
+        x_axis_label="Pseudotime",
+        tools="hover,save,pan,wheel_zoom,box_zoom,reset",
+        toolbar_location="above",
+        active_scroll=None,
+        x_range=Range1d(pt_min - pt_margin, pt_max + pt_margin),
+        y_range=Range1d(-1, 1)
+    )
+    if svg_export_mode:
+        sig_fig.output_backend = "svg"
+    sig_fig.yaxis.visible = False
+    sig_fig.ygrid.visible = False
+
+    basis_range = Range1d(start=0.5, end=K + 0.5)
+    sig_fig.extra_x_ranges = {"basis": basis_range}
+    
+    sync_code = f"""
+        const new_start = (cb_obj.start - {pt_min}) / {pt_spacing} + 1.0;
+        const new_end = (cb_obj.end - {pt_min}) / {pt_spacing} + 1.0;
+        basis_range.start = new_start;
+        basis_range.end = new_end;
+    """
+    callback = CustomJS(args=dict(basis_range=basis_range), code=sync_code)
+    sig_fig.x_range.js_on_change('start', callback)
+    sig_fig.x_range.js_on_change('end', callback)
+    
+    basis_axis = LinearAxis(x_range_name="basis", axis_label="Basis Number")
+    sig_fig.add_layout(basis_axis, 'above')
+    
+    sig_fig.rect(
+        x="pseudotime", y=0, width=pt_spacing * 0.9, height=1.8,
+        source=sig_src,
+        fill_color={"field": "q_value_plot", "transform": cmap},
+        line_color="lightgrey",
+        line_width=1
+    )
+
+    hover = sig_fig.select(dict(type=HoverTool))[0]
+    hover.tooltips = [
+        ("Basis", "@basis_name (@basis_index)"),
+        ("q-value", "@q_value{%0.2e}"),
+        ("Pseudotime", "@pseudotime{0.00}")
+    ]
+    hover.formatters = {"@q_value": "printf"}
+
+    cbar = ColorBar(color_mapper=cmap, title="q-value", orientation="horizontal", padding=0)
+    sig_fig.add_layout(cbar, 'below')
+
+    # Add Reconstruction Figure
+    recon_fig = figure(
+        width=800, height=250,
+        title="Sample Reconstruction (asinh)",
+        tools="pan,wheel_zoom,box_zoom,reset,save",
+        toolbar_location="above",
+        x_axis_label="Pseudotime",
+        x_range=sig_fig.x_range,
+        active_scroll=None
+    )
+    recon_fig.yaxis.visible = False
+    recon_fig.xaxis[0].ticker = sig_fig.xaxis[0].ticker
+    if svg_export_mode:
+        recon_fig.output_backend = "svg"
+    
+    recon_src = ColumnDataSource(dict(t=[], y=[]))
+    recon_fig.line('t', 'y', source=recon_src, line_color="black", line_width=2)
+
+    sample_list = list(H["_sid"].astype(str).unique())
+    recon_sample_sel = pn.widgets.Select(name="Select Sample for Reconstruction", options=sample_list, value=sample_list[0])
+
+    t_eval = np.linspace(lo, hi, max(1000, K*10))
+    A_eval = Phi(t_eval)
+
+    def _update_recon(*events):
+        s = str(recon_sample_sel.value)
+        recon_fig.title.text = f"Sample Reconstruction: {s} (asinh)"
+        row = H[H["_sid"].astype(str) == s]
+        if len(row) > 0:
+            h_vals = row.iloc[0][stats_sorted["basis"]].values.astype(float)
+            yhat = A_eval @ h_vals
+            recon_src.data = dict(t=t_eval, y=np.arcsinh(yhat))
+
+    recon_sample_sel.param.watch(_update_recon, "value")
+    _update_recon()
+
     jitter_src = ColumnDataSource(data=dict(x=[], y=[], group=[], sample_id=[]))
     jitter_fig = figure(
         width=600, height=360,
@@ -115,10 +254,15 @@ def nmf_group_importance_dashboard_stable(
         tools="pan,wheel_zoom,box_zoom,reset,save",
         active_scroll=None,
     )
+    if svg_export_mode:
+        jitter_fig.output_backend = "svg"
     jitter_r = jitter_fig.circle("x", "y", source=jitter_src, size=7, fill_alpha=0.75, line_alpha=0.25)
     jitter_fig.add_tools(HoverTool(renderers=[jitter_r], tooltips=[("sample", "@sample_id"), ("group", "@group"), ("loading", "@y{0.000}")]))
     jitter_fig.xaxis.ticker = list(range(len(groups)))
-    jitter_fig.xaxis.major_label_overrides = {i: g for i, g in enumerate(groups)}
+    jitter_fig.xaxis.formatter = CustomJSTickFormatter(code=f"""
+        const mapping = {repr(dict(enumerate(groups)))};
+        return mapping[tick] || "";
+    """)
 
     def _update_jitter():
         b = str(basis_sel.value)
@@ -150,6 +294,11 @@ def nmf_group_importance_dashboard_stable(
     return pn.Column(
         pn.pane.Markdown("**Differential basis stats (Kruskal + BH-FDR)**"),
         stats_pane,
+        pn.Row(download_btn),
+        pn.layout.Divider(),
+        pn.Row(recon_sample_sel),
+        pn.Row(pn.pane.Bokeh(recon_fig), sizing_mode="stretch_width"),
+        pn.Row(pn.pane.Bokeh(sig_fig), sizing_mode="stretch_width"),
         pn.layout.Divider(),
         pn.Row(basis_sel),
         pn.Row(pn.pane.Bokeh(jitter_fig), sizing_mode="stretch_width"),
@@ -160,13 +309,14 @@ def nmf_group_importance_dashboard_stable(
 class NMFMetaDashboardController:
     def __init__(self):
         self.H_df: pd.DataFrame | None = None
+        self.centers: np.ndarray | None = None
         self.metadata_df: pd.DataFrame | None = None
 
         self.file_input_meta = pn.widgets.FileInput(accept=".csv,.xlsx", multiple=False)
-        self.file_input_meta.param.watch(self._on_meta_upload, "value")
-        
         self.file_input_nmf = pn.widgets.FileInput(accept=".csv", multiple=False)
-        self.file_input_nmf.param.watch(self._on_nmf_upload, "value")
+        
+        self.import_btn = pn.widgets.Button(name="Import Data", button_type="primary")
+        self.import_btn.on_click(self._on_import_data)
         
         self.metadata_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=200, sizing_mode="stretch_width", visible=False)
         self.nmf_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=200, sizing_mode="stretch_width", visible=False)
@@ -174,7 +324,16 @@ class NMFMetaDashboardController:
         self.sample_col_select = pn.widgets.Select(name="Sample ID Column", options=[])
         self.group_col_select = pn.widgets.Select(name="Category Column", options=[])
         
+        self.calc_basis_btn = pn.widgets.Button(name="Calculate Basis Regression Matrix", button_type="warning")
+        self.calc_basis_btn.on_click(self._on_calc_basis)
+        self.basis_reg_container = pn.Column(sizing_mode="stretch_width")
+        
         self.min_group_size = pn.widgets.IntInput(name="Min Group Size", value=3, start=1)
+        self.svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
+        self.svg_export.param.watch(self._on_run, "value")
+
+        self.roi_lo = pn.widgets.FloatInput(name="NMF ROI Start (min)", value=0.0, step=0.01, width=150)
+        self.roi_hi = pn.widgets.FloatInput(name="NMF ROI End (max)", value=1.0, step=0.01, width=150)
 
         self.run_btn = pn.widgets.Button(name="Run Group Importance Analysis", button_type="primary", disabled=True)
         self.run_btn.on_click(self._on_run)
@@ -191,16 +350,29 @@ class NMFMetaDashboardController:
             pn.pane.Markdown("**2. Provide Metadata:**", styles={"color": "#555", "margin-top": "10px"}),
             pn.Row(self.file_input_meta),
             self.metadata_preview,
-            pn.Row(self.sample_col_select, self.group_col_select, self.min_group_size),
-            pn.Row(self.run_btn),
+            pn.Row(self.import_btn),
+            pn.pane.Markdown("**3. Set Parameters & Run Analysis:**", styles={"color": "#555", "margin-top": "10px"}),
+            pn.pane.Markdown("*(Important: Make sure the pseudotime range below perfectly matches the ROI used to generate your NMF bases!)*", styles={"color": "darkred", "font-style": "italic", "font-size": "0.9em"}),
+            pn.Row(self.roi_lo, self.roi_hi, self.min_group_size, pn.Column("Sample ID:", self.sample_col_select), pn.Column("Category:", self.group_col_select)),
+            pn.Row(self.svg_export, pn.Spacer(width=12), self.run_btn),
             self.status,
-            pn.layout.Divider(),
             self.dashboard_pane,
+            pn.layout.Divider(),
+            pn.Row(self.calc_basis_btn),
+            self.basis_reg_container,
             sizing_mode="stretch_width"
         )
 
-    def set_H(self, H_df: pd.DataFrame):
+    def set_H(self, H_df: pd.DataFrame, centers: np.ndarray | None = None):
         self.H_df = H_df.copy()
+        self.centers = centers
+        
+        if self.centers is not None and len(self.centers) > 0:
+            self.roi_lo.value = float(np.min(self.centers))
+            self.roi_hi.value = float(np.max(self.centers))
+        else:
+            self.roi_lo.value = 0.0
+            self.roi_hi.value = 1.0
         
         if "Unnamed: 0" not in self.H_df.columns:
             # If coming from live memory, the sample IDs are in the index.
@@ -215,58 +387,132 @@ class NMFMetaDashboardController:
             self.status.object = "NMF loadings loaded. Ready to run analysis."
         else:
             self.status.object = "NMF loadings loaded. Please upload metadata to continue."
-
-    def _on_nmf_upload(self, event):
-        if not self.file_input_nmf.value:
+        
+    def _on_calc_basis(self, event):
+        self._update_basis_regression()
+        
+    def _update_basis_regression(self):
+        from bokeh.models import LinearColorMapper, HoverTool, ColorBar
+        from bokeh.plotting import figure
+        from scipy import stats
+        import math
+        
+        if self.H_df is None or self.H_df.empty:
+            self.basis_reg_container.clear()
             return
             
-        try:
-            filename = self.file_input_nmf.filename
-            content = self.file_input_nmf.value
-            
-            df = pd.read_csv(io.BytesIO(content))
-            self.set_H(df)
-            self.status.object = f"Loaded standalone NMF CSV: {filename}."
-
-        except Exception as e:
-            self.status.object = f"**Error parsing NMF file:** {e}"
-
-    def _on_meta_upload(self, event):
-        if not self.file_input_meta.value:
+        cols = [c for c in self.H_df.columns if c != "Unnamed: 0"]
+        if len(cols) < 2:
+            self.basis_reg_container.clear()
             return
             
-        try:
-            filename = self.file_input_meta.filename
-            content = self.file_input_meta.value
+        data = []
+        for i, v1 in enumerate(cols):
+            for j, v2 in enumerate(cols):
+                if i > j: # Half square (lower triangle)
+                    df_pair = self.H_df[[v1, v2]].dropna()
+                    if len(df_pair) < 3:
+                        data.append({'var1': i+1, 'var2': j+1, 'name1': v1, 'name2': v2, 'r': np.nan, 'p': np.nan})
+                        continue
+                    try:
+                        res = stats.linregress(df_pair[v2], df_pair[v1])
+                        data.append({'var1': i+1, 'var2': j+1, 'name1': v1, 'name2': v2, 'r': res.rvalue, 'p': res.pvalue})
+                    except Exception:
+                        data.append({'var1': i+1, 'var2': j+1, 'name1': v1, 'name2': v2, 'r': np.nan, 'p': np.nan})
+                        
+        plot_df = pd.DataFrame(data)
+        
+        from bokeh.palettes import RdBu
+        cmap = LinearColorMapper(palette=list(reversed(RdBu[11])), low=-1.0, high=1.0, nan_color="lightgray")
+        
+        # Determine ranges
+        min_var = 1
+        max_var = len(cols)
+        p = figure(title="Basis Regression Matrix (r-value)",
+                   x_range=(0.5, max_var - 0.5), y_range=(max_var + 0.5, 1.5), # Reversed y so top-left is (1, 2)
+                   x_axis_location="above", width=850, height=600,
+                   x_axis_label="Basis #", y_axis_label="Basis #",
+                   tools="hover,save,pan,wheel_zoom,box_zoom,reset", toolbar_location="right")
+                   
+        p.rect(x="var2", y="var1", width=1, height=1, source=plot_df,
+               line_color=None, fill_color={"field": "r", "transform": cmap})
+               
+        hover = p.select_one(HoverTool)
+        hover.tooltips = [
+            ("Pair", "@name1 vs @name2"),
+            ("r", "@r{0.000}"),
+            ("p-value", "@p{0.00e-0}")
+        ]
+        
+        color_bar = ColorBar(color_mapper=cmap, width=8, location=(0,0))
+        p.add_layout(color_bar, 'right')
+        
+        if self.svg_export.value:
+            p.output_backend = "svg"
             
-            if filename.endswith(".csv"):
+        pane = pn.pane.Bokeh(p, sizing_mode="fixed", width=850, height=600)
+        self.basis_reg_container.clear()
+        self.basis_reg_container.append(pane)
+
+    def _on_import_data(self, event):
+        nmf_loaded = False
+        meta_loaded = False
+        
+        if self.file_input_nmf.value:
+            try:
+                filename = self.file_input_nmf.filename
+                content = self.file_input_nmf.value
                 df = pd.read_csv(io.BytesIO(content))
-            else:
-                df = pd.read_excel(io.BytesIO(content))
+                self.set_H(df)
+                nmf_loaded = True
+            except Exception as e:
+                self.status.object = f"**Error parsing NMF file:** {e}"
+                return
                 
-            self.metadata_df = df
-            cols = list(df.columns)
-            self.sample_col_select.options = cols
-            self.group_col_select.options = cols
-            
-            if len(cols) >= 2:
-                self.sample_col_select.value = cols[0]
-                self.group_col_select.value = cols[1]
+        if self.file_input_meta.value:
+            try:
+                filename = self.file_input_meta.filename
+                content = self.file_input_meta.value
+                if filename.endswith(".csv"):
+                    df = pd.read_csv(io.BytesIO(content))
+                else:
+                    df = pd.read_excel(io.BytesIO(content))
+                    
+                self.metadata_df = df
+                cols = list(df.columns)
+                self.sample_col_select.options = cols
+                self.group_col_select.options = cols
+                
+                if len(cols) >= 2:
+                    self.sample_col_select.value = cols[0]
+                    self.group_col_select.value = cols[1]
 
-            self.metadata_preview.object = df.head(5)
-            self.metadata_preview.visible = True
+                self.metadata_preview.object = df.head(5)
+                self.metadata_preview.visible = True
+                meta_loaded = True
 
+            except Exception as e:
+                self.status.object = f"**Error parsing metadata file:** {e}"
+                self.metadata_df = None
+                self.metadata_preview.visible = False
+                self.run_btn.disabled = True
+                return
+                
+        if nmf_loaded and meta_loaded:
+            self.status.object = "Loaded both NMF and Metadata. Ready to run analysis."
+        elif meta_loaded:
             if self.H_df is not None:
-                self.run_btn.disabled = False
-                self.status.object = f"Loaded {filename}. Ready to run analysis."
+                self.status.object = "Loaded Metadata. Ready to run analysis."
             else:
-                self.status.object = f"Loaded {filename}, but waiting for NMF decomposition to finish."
-
-        except Exception as e:
-            self.status.object = f"**Error parsing file:** {e}"
-            self.metadata_df = None
-            self.metadata_preview.visible = False
-            self.run_btn.disabled = True
+                self.status.object = "Loaded Metadata, but waiting for NMF decomposition to finish."
+        elif nmf_loaded:
+            if self.metadata_df is not None:
+                self.status.object = "Loaded NMF CSV. Ready to run analysis."
+            else:
+                self.status.object = "Loaded NMF CSV, but waiting for Metadata."
+                
+        if self.metadata_df is not None and self.H_df is not None:
+            self.run_btn.disabled = False
 
     def _on_run(self, event):
         if self.H_df is None or self.metadata_df is None:
@@ -282,12 +528,13 @@ class NMFMetaDashboardController:
         
         try:
             dash = nmf_group_importance_dashboard_stable(
-                metadata_df=self.metadata_df,
-                nmf_loadings_df=self.H_df,
+                self.metadata_df, self.H_df,
                 group_col=self.group_col_select.value,
                 meta_sample_col=self.sample_col_select.value,
                 nmf_sample_col="Unnamed: 0",
                 min_group_size=self.min_group_size.value,
+                roi_range=(self.roi_lo.value, self.roi_hi.value),
+                svg_export_mode=self.svg_export.value,
             )
             self.dashboard_pane.append(dash)
             self.status.object = "Analysis complete."

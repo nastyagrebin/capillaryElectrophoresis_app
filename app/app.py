@@ -30,6 +30,7 @@ from nmf_meta_dashboard import build_nmf_meta_section
 from viz_utils import build_viz_section
 from diversity_utils import build_diversity_section
 from misc_utils import build_misc_section
+from timeseries_utils import build_timeseries_section
 from snr_utils import SNRController
 
 # ---------------- Common UI helpers ----------------
@@ -60,6 +61,8 @@ class SessionState:
         self.rows_are_traces_aligned: bool = False
         # NMF loadings
         self.H_df: Optional[pd.DataFrame] = None
+        # Session parameters logging
+        self.session_log: Dict[str, dict] = {}
 
 state = SessionState()
 
@@ -87,14 +90,19 @@ def _restore_state_from_cache(key: str):
     return True
 
 def _ensure_session_token():
-    if pn.state.location is None:
+    if getattr(pn.state, "location", None) is None:
         return None
     qp = dict(pn.state.location.query_params)
     sid = qp.get("sid", [None])[0]
     if not sid:
         sid = uuid.uuid4().hex[:8]
-        qp["sid"] = [sid]
-        pn.state.location.update(query_params=qp, replace=True)
+        try:
+            if hasattr(pn.state.location, "update"):
+                pn.state.location.update(query_params={"sid": sid})
+            else:
+                pn.state.location.search = f"?sid={sid}"
+        except Exception:
+            pass
     return sid
 
 def _onload():
@@ -166,9 +174,10 @@ merge_name.param.watch(lambda e: setattr(merge_download, "filename", e.new or "m
 
 plot_pane = pn.pane.Bokeh(sizing_mode="stretch_width")
 offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
+upload_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
 
 downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(zip_name, zip_download), pn.Row(merge_name, merge_download), merge_status, visible=False, sizing_mode="stretch_width")
-preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle), plot_pane, visible=False, sizing_mode="stretch_width")
+preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle, upload_svg_export), plot_pane, visible=False, sizing_mode="stretch_width")
 
 def _on_upload_change(event):
     files = []
@@ -190,6 +199,14 @@ def _on_upload_change(event):
     state.merged_df = None
     state.last_fig = None
     state.current_by_sample = {}
+    
+    import datetime
+    state.session_log.clear()
+    state.session_log["General"] = {
+        "App Version": "1.0.0 (Placeholder)",
+        "Session Date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Uploaded Files": [f[0] for f in files]
+    }
 
     zip_download.disabled = True
     merge_download.disabled = True
@@ -222,12 +239,14 @@ def _render_plot(*_):
         state.last_fig = None
         return
     fig = make_preview_plot(state.converted_by_sample, minutes=prefer_minutes.value, offset=offset_slider.value, asinh=asinh_toggle.value, title="Chromatograph(s) preview")
+    fig.output_backend = "svg" if upload_svg_export.value else "canvas"
     plot_pane.object = fig
     state.last_fig = fig
 
 offset_slider.param.watch(_render_plot, "value")
 prefer_minutes.param.watch(_render_plot, "value")
 asinh_toggle.param.watch(_render_plot, "value")
+upload_svg_export.param.watch(_render_plot, "value")
 
 def _on_convert_click(event):
     if not state.uploads:
@@ -371,10 +390,11 @@ viz_section.visible = True
 
 diversity_section, diversity_ctrl = build_diversity_section()
 misc_section, misc_ctrl = build_misc_section()
+timeseries_section, timeseries_ctrl = build_timeseries_section()
 diversity_section.visible = True
 
 # CRITICAL WIRING: feed Diversity metrics into Viz for coloring
-diversity_ctrl.on_updated = viz_ctrl.set_diversity  # <-- FIX: bridge metrics to Viz
+# Removed duplicate diversity binding here; handled below
 
 # ===================== UNLOCK HELPERS =====================
 def _unlock_despike():
@@ -440,7 +460,7 @@ def _unlock_alignment():
     alignment_ctrl.set_input(state.current_by_sample)
     alignment_section.visible = True
 
-def _unlock_viz_after_nmf(H_df: pd.DataFrame):
+def _unlock_viz_after_nmf(H_df: pd.DataFrame, centers: Optional[np.ndarray] = None):
     """
     Called after either NMF tab completes. Makes Viz ready.
     """
@@ -454,7 +474,7 @@ def _unlock_viz_after_nmf(H_df: pd.DataFrame):
         
     # NMF Meta Dashboard gets H
     try:
-        nmf_meta_ctrl.set_H(H_df)
+        nmf_meta_ctrl.set_H(H_df, centers)
         nmf_meta_section.visible = True
     except Exception:
         pass
@@ -476,6 +496,11 @@ def _wire_despike_apply():
         if not out: despike_ctrl.status.object = warn("Generate a despiking preview first."); return
         _set_working_dataset(out)
         despike_ctrl.status.object = ok("Despiked data applied.")
+        state.session_log["Preprocessing: Despike"] = {
+            "Status": "Applied",
+            "Window": despike_ctrl.window.value,
+            "Z-Score Threshold": despike_ctrl.z_thresh.value
+        }
         _unlock_smoothing()
     despike_ctrl.apply_btn.on_click(_apply)
 
@@ -485,6 +510,7 @@ def _wire_despike_skip():
         if not inp: despike_ctrl.status.object = warn("No input data to skip."); return
         _set_working_dataset(inp)
         despike_ctrl.status.object = ok("Skipped despiking. Using input data.")
+        state.session_log["Preprocessing: Despike"] = {"Status": "Skipped"}
         _unlock_smoothing()
     despike_ctrl.skip_btn.on_click(_skip)
 
@@ -498,6 +524,12 @@ def _wire_smooth_apply():
         if not out: smooth_ctrl.status.object = warn("Please click 'Show smoothing preview' first."); return
         _set_working_dataset(out)
         smooth_ctrl.status.object = ok("Smoothed data applied.")
+        state.session_log["Preprocessing: Smooth"] = {
+            "Status": "Applied",
+            "Window": smooth_ctrl.window.value,
+            "Polyorder": smooth_ctrl.poly.value,
+            "Derivative order": smooth_ctrl.deriv_slider.value
+        }
         _unlock_baseline()
     smooth_ctrl.apply_btn.on_click(_apply)
 
@@ -507,6 +539,7 @@ def _wire_smooth_skip():
         if not inp: smooth_ctrl.status.object = warn("No input data to skip."); return
         _set_working_dataset(inp)
         smooth_ctrl.status.object = ok("Skipped smoothing. Using input data.")
+        state.session_log["Preprocessing: Smooth"] = {"Status": "Skipped"}
         _unlock_baseline()
     smooth_ctrl.skip_btn.on_click(_skip)
 
@@ -516,6 +549,11 @@ def _wire_baseline_apply():
         if not out: baseline_ctrl.status.object = warn("Generate a baseline preview first."); return
         _set_working_dataset(out)
         baseline_ctrl.status.object = ok("Baseline-subtracted data applied.")
+        state.session_log["Preprocessing: Baseline"] = {
+            "Status": "Applied",
+            "Baseline Start": baseline_ctrl.baseline_start.value,
+            "Baseline End": baseline_ctrl.baseline_end.value
+        }
         _unlock_normalization()
     baseline_ctrl.apply_btn.on_click(_apply)
 
@@ -525,6 +563,7 @@ def _wire_baseline_skip():
         if not inp: baseline_ctrl.status.object = warn("No input data to skip."); return
         _set_working_dataset(inp)
         baseline_ctrl.status.object = ok("Skipped baseline subtraction. Using input data.")
+        state.session_log["Preprocessing: Baseline"] = {"Status": "Skipped"}
         _unlock_normalization()
     baseline_ctrl.skip_btn.on_click(_skip)
 
@@ -552,20 +591,38 @@ _wire_baseline_apply()
 _wire_baseline_skip()
 
 def _wire_norm_apply_skip():
-    def _apply(_=None):
+    def _apply(event=None):
         out = getattr(norm_ctrl, "normalized_by_sample", None) or getattr(norm_ctrl, "output_by_sample", None)
         if not out: norm_ctrl.status.object = warn("Generate a normalization preview first."); return
         state.current_by_sample = {k: v.copy() for k, v in out.items()}
         norm_ctrl.status.object = ok("Normalized data applied. Later tabs will use normalized traces.")
+        
+        # Log norm parameters
+        try:
+            xmin = float(norm_ctrl._sel_state.data['xmin'][0])
+            xmax = float(norm_ctrl._sel_state.data['xmax'][0])
+        except Exception:
+            xmin, xmax = "Unknown", "Unknown"
+            
+        method = "Area" if (event and event.obj.name == "Normalize by Area") else ("Height" if (event and event.obj.name == "Normalize by Height") else "Applied")
+            
+        state.session_log["Preprocessing: Normalization"] = {
+            "Status": method,
+            "Reference Peak Start": xmin,
+            "Reference Peak End": xmax
+        }
+        
         _goto_alignment_with_current(note="(apply)")
         try: _maybe_snapshot("(after norm apply)")
         except Exception: pass
     norm_ctrl.apply_btn.on_click(_apply)
+    norm_ctrl.apply_height_btn.on_click(_apply)
 
     def _skip(_=None):
         norm_ctrl.status.object = ok("Skipped normalization. Current dataset unchanged.")
         if not state.current_by_sample:
             state.current_by_sample = {k: v.copy() for k, v in state.converted_by_sample.items()}
+        state.session_log["Preprocessing: Normalization"] = {"Status": "Skipped"}
         _goto_alignment_with_current(note="(skip)")
         try: _maybe_snapshot("(after norm skip)")
         except Exception: pass
@@ -577,6 +634,14 @@ def _alignment_done_callback(pseudotimes_df: pd.DataFrame, norm_df: pd.DataFrame
     state.aligned_pseudotimes_df = pseudotimes_df.copy()
     state.aligned_norm_df        = norm_df.copy()
     state.rows_are_traces_aligned = bool(rows_are_traces)
+    bridge_status.object = ok("Alignment completed. Proceed to NMF.")
+    
+    state.session_log["Alignment"] = {
+        "Status": "Completed",
+        "Mode": alignment_ctrl.align_mode.value,
+        "Reference Sample": alignment_ctrl.reference_sample.value
+    }
+    
     # Prime current NMF and focus its tab
     try:
         nmf_ctrl.set_alignment_input(pseudotimes_df, norm_df, rows_are_traces=rows_are_traces)
@@ -605,14 +670,36 @@ except Exception:
     pass
 
 # ---------- When either NMF finishes, unlock viz ----------
-def _nmf_done_callback(H_df: pd.DataFrame):
-    _unlock_viz_after_nmf(H_df)
+def _nmf_done_callback(H_df: pd.DataFrame, centers: Optional[np.ndarray] = None):
+    state.session_log["NMF"] = {
+        "Status": "Completed",
+        "Num Components": nmf_ctrl.k_slider.value,
+        "L2 Penalty": nmf_ctrl.l2_input.value,
+        "ROI Start": nmf_ctrl.roi_lo.value,
+        "ROI End": nmf_ctrl.roi_hi.value
+    }
+    _unlock_viz_after_nmf(H_df, centers)
     bridge_status.object = ok("NMF loadings set for this session.")
     try: _maybe_snapshot("(after NMF)")
     except Exception: pass
 
 try:
     nmf_ctrl.on_done  = _nmf_done_callback
+except Exception:
+    pass
+
+def _diversity_updated_callback(div_df: pd.DataFrame):
+    state.session_log["Alpha Diversity"] = {
+        "Status": "Completed",
+        "Edge Smooth Window": diversity_ctrl.edge_smooth.value,
+        "Baseline Window": diversity_ctrl.baseline_window.value,
+        "ROI Start": diversity_ctrl.roi_lo.value,
+        "ROI End": diversity_ctrl.roi_hi.value
+    }
+    viz_ctrl.set_diversity(div_df)
+
+try:
+    diversity_ctrl.on_updated = _diversity_updated_callback
 except Exception:
     pass
 
@@ -626,6 +713,9 @@ preproc_tab = pn.Column(
     sizing_mode="stretch_width",
 )
 
+from report_utils import build_report_section
+report_section, report_ctrl = build_report_section()
+
 TABS = pn.Tabs(
     ("Upload", upload_tab),
     ("SNR", snr_ctrl.section),
@@ -636,20 +726,46 @@ TABS = pn.Tabs(
     ("Alpha Diversity", diversity_section),
     ("Visualization", viz_section),
     ("Miscellaneous", misc_section),
+    ("Time Series", timeseries_section),
+    ("Final Report", report_section),
     dynamic=True,
 )
 
 def _on_tab_change(event):
-    if event.new == 8: # Miscellaneous tab index
-        loadings = nmf_ctrl.H_df
-        meta = viz_ctrl.meta_table.value
-        if meta is not None and not meta.empty and "sample" in meta.columns:
-            m = meta.copy()
-            m.set_index("sample", inplace=True)
-        else:
-            m = None
-        div = diversity_ctrl.metric_df
-        misc_ctrl.bridge_data(loadings_df=loadings, meta_df=m, div_df=div)
+    if event.new in [8, 9]: # Miscellaneous (8) or Time Series (9)
+        # Try to get loadings from NMF stats (might be uploaded) or NMF
+        loadings = getattr(nmf_meta_ctrl, "H_df", None)
+        if loadings is None or loadings.empty:
+            loadings = getattr(nmf_ctrl, "H_df", None)
+        if loadings is not None and not loadings.empty:
+            loadings = loadings.copy()
+            if "Unnamed: 0" in loadings.columns:
+                loadings.set_index("Unnamed: 0", inplace=True)
+
+        # Try to get metadata from visualization or NMF stats
+        m = None
+        if hasattr(viz_ctrl, "meta_table") and viz_ctrl.meta_table.value is not None and not viz_ctrl.meta_table.value.empty:
+            tmp = viz_ctrl.meta_table.value
+            if "sample" in tmp.columns:
+                m = tmp.copy()
+                m.set_index("sample", inplace=True)
+        
+        if (m is None or m.empty) and hasattr(nmf_meta_ctrl, "metadata_df") and nmf_meta_ctrl.metadata_df is not None and not nmf_meta_ctrl.metadata_df.empty:
+            tmp = nmf_meta_ctrl.metadata_df.copy()
+            scol = getattr(nmf_meta_ctrl.sample_col_select, "value", None)
+            if scol and scol in tmp.columns:
+                tmp.set_index(scol, inplace=True)
+                m = tmp
+
+        div = getattr(diversity_ctrl, "metric_df", None)
+        
+        if event.new == 8:
+            misc_ctrl.bridge_data(loadings_df=loadings, meta_df=m, div_df=div)
+        elif event.new == 9:
+            timeseries_ctrl.bridge_data(loadings_df=loadings, meta_df=m, div_df=div)
+            
+    elif event.new == 10: # Final Report
+        report_ctrl.update_preview(state.session_log)
 
 TABS.param.watch(_on_tab_change, "active")
 
@@ -658,7 +774,7 @@ app = pn.Column(HEADER, bridge_status, TABS, sizing_mode="stretch_width")
 app.servable(title="CEtools Pipeline")
 
 if __name__ == "__main__":
-    pn.serve(app, title="CEtools Pipeline", show=True)
+    pn.serve(app, title="CEtools Pipeline", show=True, websocket_max_message_size=104857600)
 
 
 

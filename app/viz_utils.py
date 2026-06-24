@@ -52,6 +52,10 @@ class VizController:
         self.nmf_file = pn.widgets.FileInput(accept=".csv", multiple=False)
         self.nmf_file.param.watch(self._on_load_nmf_csv, "value")
 
+        # ---- Standalone Diversity Upload UI ----
+        self.div_file = pn.widgets.FileInput(accept=".csv", multiple=False)
+        self.div_file.param.watch(self._on_load_div_csv, "value")
+
         # ---- Metadata entry/upload UI ----
         self.meta_help = pn.pane.Markdown(
             "Upload a CSV/XLSX with two columns **sample, metadata**, or edit manually below.",
@@ -80,6 +84,8 @@ class VizController:
             name="Value type", options=["categorical", "continuous"], value="categorical"
         )
         self.div_metric_select = pn.widgets.Select(name="Metric", options=[], value=None, width=220)  # populated later
+        
+        self.svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
 
         self.visualize_btn = pn.widgets.Button(name="Visualize", button_type="success", disabled=True)
         self.status = pn.pane.Markdown("", sizing_mode="fixed")
@@ -110,12 +116,14 @@ class VizController:
                              styles={"color": "#555"}),
             pn.pane.Markdown("**1. Upload Pre-computed NMF Loadings (Optional):**", styles={"color":"#555", "margin-top": "10px"}),
             pn.Row(self.nmf_file),
+            pn.pane.Markdown("**1.5. Upload Pre-computed Diversity Metrics (Optional):**", styles={"color":"#555", "margin-top": "10px"}),
+            pn.Row(self.div_file),
             pn.pane.Markdown("**2. Upload Metadata:**", styles={"color":"#555", "margin-top": "10px"}),
             pn.Row(self.meta_file, pn.Spacer(width=10), self.meta_load_btn, pn.Spacer(width=20),
                    self.color_source, pn.Spacer(width=10), self.meta_col_select, pn.Spacer(width=10), self.div_metric_select, pn.Spacer(width=20), self.meta_mode),
             self.meta_help,
             self.meta_table,
-            pn.Row(self.visualize_btn),
+            pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn),
             pn.layout.Divider(),
             pn.pane.Markdown("### PCA / PLS-DA of NMF loadings (colored)"),
             pn.Row(self.pca_n, pn.Spacer(width=10), self.pca_x, pn.Spacer(width=10), self.pca_y, pn.Spacer(width=10), self.pls_x, pn.Spacer(width=10), self.pls_y),
@@ -183,6 +191,17 @@ class VizController:
             self.status.object = ok(f"Loaded NMF CSV: {filename}. Now upload metadata.")
         except Exception as e:
             self.status.object = warn(f"Failed to parse NMF CSV: {e}")
+
+    def _on_load_div_csv(self, event):
+        if not self.div_file.value:
+            return
+        try:
+            filename = self.div_file.filename or "diversity.csv"
+            df = pd.read_csv(io.BytesIO(self.div_file.value), index_col=0)
+            self.set_diversity(df)
+            self.status.object = ok(f"Loaded Diversity CSV: {filename}.")
+        except Exception as e:
+            self.status.object = warn(f"Failed to parse Diversity CSV: {e}")
 
     def set_diversity(self, df: pd.DataFrame) -> None:
         """Accept external diversity metrics (rows=samples, cols=metrics)."""
@@ -349,18 +368,19 @@ class VizController:
                 y_axis_label=f"PC{pcy} {pca.explained_variance_ratio_[iy]*100.0:.1f}%",
                 tools="hover,pan,box_zoom,reset,save",
                 active_scroll=None,
+                output_backend="svg" if self.svg_export.value else "canvas",
             )
             pls_p = None
 
             if cat:
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Viridis256
+                from bokeh.palettes import Category10, Magma256
                 if len(unique) <= 10:
                     palette = list(Category10[10])
                 else:
                     idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Viridis256[i] for i in idxs]
+                    palette = [Magma256[i] for i in idxs]
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 # Plot PCA categorical
@@ -399,6 +419,7 @@ class VizController:
                             x_axis_label=f"LV{lv_x}", y_axis_label=f"LV{lv_y}",
                             tools="hover,pan,box_zoom,reset,save",
                             active_scroll=None,
+                            output_backend="svg" if self.svg_export.value else "canvas",
                         )
                         for c in unique:
                             mask = (np.array(cats) == c)
@@ -419,9 +440,9 @@ class VizController:
                     except Exception:
                         vals.append(np.nan)
                 vals = np.asarray(vals, dtype=float)
-                from bokeh.palettes import Viridis256
+                from bokeh.palettes import Magma256
                 mapper = bokeh.models.LinearColorMapper(
-                    palette=Viridis256,
+                    palette=Magma256,
                     low=float(np.nanmin(vals)) if np.isfinite(vals).any() else 0.0,
                     high=float(np.nanmax(vals)) if np.isfinite(vals).any() else 1.0,
                     nan_color="lightgray"
@@ -429,9 +450,10 @@ class VizController:
                 src = bokeh.models.ColumnDataSource(dict(x=x, y=y, label=labels, value=vals))
                 color_spec = {"field": "value", "transform": mapper}
                 p.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color=color_spec, source=src)
-                color_bar = bokeh.models.ColorBar(color_mapper=mapper, label_standoff=8, location=(0, 0))
+                color_var = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value)
+                color_bar = bokeh.models.ColorBar(color_mapper=mapper, title=str(color_var)[:20], label_standoff=8, location=(0, 0))
                 p.add_layout(color_bar, "right")
-                p.title.text += " — colored by value"
+                p.title.text += f" — colored by {str(color_var)[:20]}"
 
             p.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
             
@@ -482,6 +504,7 @@ class VizController:
                     metadata_categorical=cat,
                     title=f"MDS (metric={self.mds_metric.value})",
                 )
+            mds_fig.output_backend = "svg" if self.svg_export.value else "canvas"
             mds_fig.toolbar.active_scroll = None
             if cat:
                 mds_fig.renderers = [r for r in mds_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
@@ -493,12 +516,12 @@ class VizController:
                 labels = np.array(list(map(str, self.H_df.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Viridis256
+                from bokeh.palettes import Category10, Magma256
                 if len(unique) <= 10:
                     palette = list(Category10[10])
                 else:
                     idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Viridis256[i] for i in idxs]
+                    palette = [Magma256[i] for i in idxs]
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 for c in unique:
@@ -511,6 +534,13 @@ class VizController:
                 mds_fig.add_layout(mds_fig.legend[-1], "right")
                 mds_fig.width = (mds_fig.width or 520) + 100
                 mds_fig.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
+            else:
+                color_var = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value)
+                for rb in mds_fig.right:
+                    if isinstance(rb, bokeh.models.ColorBar):
+                        rb.title = str(color_var)[:20]
+                mds_fig.title.text += f" — colored by {str(color_var)[:20]}"
+                
             self.mds_pane.object = mds_fig
         except Exception as e:
             self.mds_pane.object = None
@@ -535,6 +565,7 @@ class VizController:
                     metadata_categorical=cat,
                     title=f"t-SNE (metric={self.tsne_metric.value}, perplexity={self.tsne_perp.value:.0f})",
                 )
+            tsne_fig.output_backend = "svg" if self.svg_export.value else "canvas"
             tsne_fig.toolbar.active_scroll = None
             if cat:
                 tsne_fig.renderers = [r for r in tsne_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
@@ -546,12 +577,12 @@ class VizController:
                 labels = np.array(list(map(str, self.H_df.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Viridis256
+                from bokeh.palettes import Category10, Magma256
                 if len(unique) <= 10:
                     palette = list(Category10[10])
                 else:
                     idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Viridis256[i] for i in idxs]
+                    palette = [Magma256[i] for i in idxs]
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 for c in unique:
@@ -564,6 +595,13 @@ class VizController:
                 tsne_fig.add_layout(tsne_fig.legend[-1], "right")
                 tsne_fig.width = (tsne_fig.width or 520) + 100
                 tsne_fig.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
+            else:
+                color_var = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value)
+                for rb in tsne_fig.right:
+                    if isinstance(rb, bokeh.models.ColorBar):
+                        rb.title = str(color_var)[:20]
+                tsne_fig.title.text += f" — colored by {str(color_var)[:20]}"
+                
             self.tsne_pane.object = tsne_fig
         except Exception as e:
             self.tsne_pane.object = None

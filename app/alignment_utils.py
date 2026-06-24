@@ -87,6 +87,10 @@ class AlignmentController:
         self.aligned_fig: Optional[bokeh.plotting.Figure] = None
         self.aligned_pane = pn.pane.Bokeh(height=420, sizing_mode="stretch_width")
 
+        # File upload for preprocessed CSV
+        self.file_input = pn.widgets.FileInput(accept=".csv", multiple=False)
+        self.file_input.param.watch(self._on_file_upload, "value")
+
         # CSV export (enabled after alignment)
         self.csv_name = pn.widgets.TextInput(name="Pseudotimes CSV filename", value="pseudotimes_wide.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
@@ -123,6 +127,8 @@ class AlignmentController:
         self.section = pn.Column(
             pn.pane.Markdown("## 3) Alignment"),
             self.info,
+            pn.Row(pn.pane.Markdown("Load a preprocessed CSV directly:"), self.file_input),
+            pn.layout.Divider(),
             pn.Row(self.n_anchors_input, pn.Spacer(width=10), self.start_btn),
             pn.Row(self.use_sel_btn, pn.Spacer(width=10), self.done_anchor_btn),
             pn.pane.Markdown(
@@ -152,6 +158,24 @@ class AlignmentController:
         )
 
     # ---------- External API ----------
+    def _on_file_upload(self, event):
+        if not self.file_input.value: return
+        try:
+            df = pd.read_csv(io.BytesIO(self.file_input.value))
+            if "time" not in df.columns:
+                self.status.object = warn("Uploaded CSV must have a 'time' column.")
+                return
+            
+            by_sample = {}
+            for col in df.columns:
+                if col != "time" and col != "Unnamed: 0":
+                    by_sample[col] = pd.DataFrame({"time": df["time"], "intensity": df[col]})
+            
+            self.set_input(by_sample)
+            self.status.object = ok("Successfully loaded preprocessed data from CSV. Proceed with alignment.")
+        except Exception as e:
+            self.status.object = warn(f"Failed to load CSV: {e}")
+
     def set_input(self, by_sample: Dict[str, pd.DataFrame]) -> None:
         self.input_by_sample = {k: v.copy() for k, v in by_sample.items()}
         self._samples = list(self.input_by_sample.keys())

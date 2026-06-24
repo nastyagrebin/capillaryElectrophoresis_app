@@ -50,7 +50,8 @@ class NormalizationController:
     after_pane: pn.pane.Bokeh = field(default_factory=lambda: pn.pane.Bokeh(sizing_mode="stretch_width"))
     status: pn.pane.Markdown = field(default_factory=lambda: pn.pane.Markdown("", sizing_mode="stretch_width"))
 
-    apply_btn: pn.widgets.Button = field(default_factory=lambda: pn.widgets.Button(name="Apply normalization", button_type="success", disabled=True))
+    apply_btn: pn.widgets.Button = field(default_factory=lambda: pn.widgets.Button(name="Normalize by Area", button_type="success", disabled=True))
+    apply_height_btn: pn.widgets.Button = field(default_factory=lambda: pn.widgets.Button(name="Normalize by Height", button_type="warning", disabled=True))
     skip_btn: pn.widgets.Button = field(default_factory=lambda: pn.widgets.Button(name="Skip normalization (use input data)", button_type="danger", disabled=True))
 
     export_name: pn.widgets.TextInput = field(default_factory=lambda: pn.widgets.TextInput(name="Normalized CSV filename", value="normalized.csv"))
@@ -78,7 +79,8 @@ class NormalizationController:
         self._render_before_fig()
 
         # Wire actions
-        self.apply_btn.on_click(self._on_apply)
+        self.apply_btn.on_click(lambda _: self._normalize(method="area"))
+        self.apply_height_btn.on_click(lambda _: self._normalize(method="height"))
         self.skip_btn.on_click(self._on_skip)
         self.export_btn.callback = self._export_bytes
         self.preproc_offset.param.watch(self._on_params_changed, "value")
@@ -91,7 +93,7 @@ class NormalizationController:
             pn.pane.Markdown("### Normalization (select peak region with Box Select)"),
             pn.Row(self.preproc_offset, self.asinh_toggle),
             self.before_pane,
-            pn.Row(self.apply_btn, pn.Spacer(width=8), self.skip_btn),
+            pn.Row(self.apply_btn, pn.Spacer(width=8), self.apply_height_btn, pn.Spacer(width=8), self.skip_btn),
             pn.layout.Divider(),
             pn.pane.Markdown("**Preview of normalized curves (after Apply):**"),
             pn.Row(self.post_offset, self.post_asinh),
@@ -250,12 +252,13 @@ class NormalizationController:
         self.before_pane.object = fig
         # Enable buttons with data present
         self.apply_btn.disabled = False
+        self.apply_height_btn.disabled = False
         self.skip_btn.disabled = False
         self.status.object = ok("Drag a box on the left figure to preview the AUC that will be used for normalization.")
 
     # ------------------------ APPLY / SKIP ------------------------
 
-    def _on_apply(self, _=None):
+    def _normalize(self, method: str = "area"):
         if not self.current_by_sample:
             self.status.object = warn("No input data to normalize.")
             return
@@ -270,7 +273,7 @@ class NormalizationController:
             xmin, xmax = xmax, xmin
 
         out: Dict[str, pd.DataFrame] = {}
-        aucs: Dict[str, float] = {}
+        norm_vals: Dict[str, float] = {}
 
         for name, df in self.current_by_sample.items():
             x = df["time"].to_numpy(dtype=float)
@@ -280,7 +283,7 @@ class NormalizationController:
             sel = (x >= xmin) & (x <= xmax)
             idx = np.where(sel)[0]
             if idx.size == 0:
-                aucs[name] = np.nan
+                norm_vals[name] = np.nan
                 out[name] = df.copy()
                 continue
 
@@ -288,28 +291,33 @@ class NormalizationController:
             i_rel = int(np.argmax(y[idx]))
             best = int(idx[i_rel])
 
-            # Grow L/R while non-increasing; clamp to selection
-            eps = 1e-9
-            L = best
-            while L > 0 and y[L-1] <= y[L] + eps: L -= 1
-            R = best
-            n_1 = y.size - 1
-            while R < n_1 and y[R+1] <= y[R] + eps: R += 1
+            if method == "height":
+                norm_val = float(y[best])
+            else:
+                # Grow L/R while non-increasing; clamp to selection
+                eps = 1e-9
+                L = best
+                while L > 0 and y[L-1] <= y[L] + eps: L -= 1
+                R = best
+                n_1 = y.size - 1
+                while R < n_1 and y[R+1] <= y[R] + eps: R += 1
 
-            while L < best and x[L] < xmin: L += 1
-            while R > best and x[R] > xmax: R -= 1
+                while L < best and x[L] < xmin: L += 1
+                while R > best and x[R] > xmax: R -= 1
 
-            if L >= R:
-                aucs[name] = np.nan
-                out[name] = df.copy()
-                continue
+                if L >= R:
+                    norm_vals[name] = np.nan
+                    out[name] = df.copy()
+                    continue
 
-            # Trapezoidal AUC above baseline=0 on [L..R]
-            xi = x[L:R+1]; yi = y[L:R+1]
-            auc = float(np.trapz(np.clip(yi, 0, None), xi))
-            aucs[name] = auc if auc > 0 else np.nan
-            if np.isfinite(aucs[name]) and aucs[name] > 0:
-                yy = y / aucs[name]
+                # Trapezoidal AUC above baseline=0 on [L..R]
+                xi = x[L:R+1]; yi = y[L:R+1]
+                norm_val = float(np.trapz(np.clip(yi, 0, None), xi))
+            
+            norm_vals[name] = norm_val if norm_val > 0 else np.nan
+            
+            if np.isfinite(norm_vals[name]) and norm_vals[name] > 0:
+                yy = y / norm_vals[name]
                 out[name] = pd.DataFrame({"time": x, "intensity": yy})
             else:
                 out[name] = df.copy()
@@ -319,7 +327,8 @@ class NormalizationController:
 
         self.export_btn.disabled = False
         self.export_status.object = ok("Ready to export normalized CSV.")
-        self.status.object = ok("Normalization applied. You can proceed to the next tab or export the normalized data.")
+        method_str = "area (AUC)" if method == "area" else "height"
+        self.status.object = ok(f"Normalization by {method_str} applied. You can proceed to the next tab or export the normalized data.")
 
     def _on_skip(self, _=None):
         # Keep input dataset as current (no change)

@@ -288,16 +288,17 @@ def build_abundance_matrix(
     baseline_window_t: Optional[float] = 0.1,
     roi: Tuple[float, float] = (0.0, 1.0),
     edge_smooth_window: int = 11,
-) -> Tuple[List[List[Peak]], List[Dict[str, float]], List[float]]:
+) -> Tuple[List[List[Peak]], List[Dict[str, float]], List[float], List[float]]:
     """
     Peak-detect each sample and compute alpha diversity directly on peak areas/heights.
     Returns
     -------
-    (peaks_all, alpha_all, total_aucs)
+    (peaks_all, alpha_all, total_aucs, roi_aucs)
     """
     peaks_all: List[List[Peak]] = []
     alpha_all: List[Dict[str, float]] = []
     total_aucs: List[float] = []
+    roi_aucs: List[float] = []
 
     for (x, y) in samples:
         if baseline_window_t is not None and baseline_window_t > 0:
@@ -309,8 +310,10 @@ def build_abundance_matrix(
                 y = y - baseline
         y = np.maximum(y, 0.0)
 
-        total_auc = compute_total_auc(x, y, roi=roi)
+        total_auc = compute_total_auc(x, y, roi=(0.0, 1.0))
+        roi_auc = compute_total_auc(x, y, roi=roi)
         total_aucs.append(total_auc)
+        roi_aucs.append(roi_auc)
 
         peaks = find_electropherogram_peaks(
             x, y,
@@ -328,7 +331,7 @@ def build_abundance_matrix(
         peaks_all.append(peaks)
         alpha_all.append(alpha_diversity(abund))
 
-    return peaks_all, alpha_all, total_aucs
+    return peaks_all, alpha_all, total_aucs, roi_aucs
 
 
 # ============================== Panel controller =================================
@@ -374,6 +377,7 @@ class DiversityController:
         self.roi_hi = pn.widgets.FloatInput(name="ROI end (t)", value=1.0, step=0.01, width=160)
 
         self.asinh_toggle = pn.widgets.Checkbox(name="Use asinh transform for plots", value=True)
+        self.svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
         self.compute_btn = pn.widgets.Button(name="Compute alpha diversity", button_type="primary", disabled=True)
         self.status = pn.pane.Markdown("", sizing_mode="stretch_width")
 
@@ -407,7 +411,7 @@ class DiversityController:
             pn.Row(self.value_kind),
             pn.Row(self.prominence, pn.Spacer(width=12), self.prom_mode, pn.Spacer(width=12), self.distance, pn.Spacer(width=12), self.width),
             pn.Row(self.edge_smooth, pn.Spacer(width=12), self.baseline_window, pn.Spacer(width=12), self.roi_lo, pn.Spacer(width=12), self.roi_hi),
-            pn.Row(self.asinh_toggle, pn.Spacer(width=12), self.compute_btn),
+            pn.Row(self.asinh_toggle, pn.Spacer(width=12), self.svg_export, pn.Spacer(width=12), self.compute_btn),
             self.status,
             pn.layout.Divider(),
             self.table,
@@ -532,7 +536,7 @@ class DiversityController:
                 XY.append((x, y))
 
             # Run pipeline
-            peaks_all, alpha_all, total_aucs = build_abundance_matrix(
+            peaks_all, alpha_all, total_aucs, roi_aucs = build_abundance_matrix(
                 XY,
                 value=value,
                 prominence=prom,
@@ -547,7 +551,9 @@ class DiversityController:
             # Compose metrics table
             # alpha_all is list of dicts with keys: richness, shannon, shannon_effective, simpson_D, gini_simpson, hill_q0,q1,q2, pielou_evenness
             key_union = set()
-            for d in alpha_all:
+            for d, t_auc, r_auc in zip(alpha_all, total_aucs, roi_aucs):
+                d["total_auc"] = t_auc
+                d["roi_auc"] = r_auc
                 key_union.update(d.keys())
             cols = sorted(key_union)
             rows = [{k: float(d.get(k, np.nan)) for k in cols} for d in alpha_all]
@@ -596,7 +602,8 @@ class DiversityController:
                     x_range=(0.0, 1.0),
                     x_axis_label="pseudotime", 
                     y_axis_label=f"{name} (asinh)" if use_asinh else f"{name} (raw)",
-                    tools="pan,wheel_zoom,box_zoom,reset,save"
+                    tools="pan,wheel_zoom,box_zoom,reset,save",
+                    output_backend="svg" if self.svg_export.value else "canvas"
                 )
                 p.line(x, y_plot, color="black", line_width=1.5)
                 
