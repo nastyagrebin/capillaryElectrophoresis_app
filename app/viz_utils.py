@@ -46,7 +46,23 @@ class VizController:
         self.samples: List[str] = []
         self.metadata_df: Optional[pd.DataFrame] = None  # sample, metadata
         self.enabled: bool = False
-        self.diversity_df: Optional[pd.DataFrame] = None  # NEW: rows=samples, cols=metrics
+
+        self.diversity_df = None  # NEW: rows=samples, cols=metrics
+        
+        self.rules = []
+        self.sliced_df = None
+        
+        # ---- Slicing UI ----
+        self.slice_col = pn.widgets.Select(name="Variable to Slice By", options=[])
+        self.slice_type = pn.widgets.RadioButtonGroup(name="Type", options=["Categorical", "Continuous"], value="Categorical")
+        self.slice_val_cat = pn.widgets.MultiChoice(name="Categories to Include", options=[], visible=True)
+        self.slice_val_cont_min = pn.widgets.FloatInput(name="Min Value", value=0.0, visible=False)
+        self.slice_val_cont_max = pn.widgets.FloatInput(name="Max Value", value=100.0, visible=False)
+        self.slice_add_btn = pn.widgets.Button(name="Add Rule", button_type="primary")
+        self.slice_clear_btn = pn.widgets.Button(name="Clear Rules", button_type="danger")
+        self.slice_apply_btn = pn.widgets.Button(name="Apply Filters", button_type="success")
+        self.slice_rules_md = pn.pane.Markdown("**Active Rules:** None", sizing_mode="stretch_width")
+
 
         # ---- Standalone NMF Upload UI ----
         self.nmf_file = pn.widgets.FileInput(accept=".csv", multiple=False)
@@ -122,9 +138,17 @@ class VizController:
             pn.Row(self.meta_file, pn.Spacer(width=10), self.meta_load_btn, pn.Spacer(width=20),
                    self.color_source, pn.Spacer(width=10), self.meta_col_select, pn.Spacer(width=10), self.div_metric_select, pn.Spacer(width=20), self.meta_mode),
             self.meta_help,
+
             self.meta_table,
             pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn),
             pn.layout.Divider(),
+            pn.pane.Markdown("### 3. Subset Data (Optional)"),
+            pn.Row(self.slice_col, pn.Column("Type:", self.slice_type)),
+            pn.Row(self.slice_val_cat, self.slice_val_cont_min, self.slice_val_cont_max),
+            pn.Row(self.slice_add_btn, self.slice_clear_btn, self.slice_apply_btn),
+            self.slice_rules_md,
+            pn.layout.Divider(),
+
             pn.pane.Markdown("### PCA / PLS-DA of NMF loadings (colored)"),
             pn.Row(self.pca_n, pn.Spacer(width=10), self.pca_x, pn.Spacer(width=10), self.pca_y, pn.Spacer(width=10), self.pls_x, pn.Spacer(width=10), self.pls_y),
             self.pca_pane,
@@ -145,8 +169,16 @@ class VizController:
         )
 
         # Wire
+
         self.meta_load_btn.on_click(self._on_load_meta_file)
         self.visualize_btn.on_click(self._on_visualize_enable)
+        
+        self.slice_col.param.watch(self._update_slicing_ui, 'value')
+        self.slice_type.param.watch(self._update_slicing_ui, 'value')
+        self.slice_add_btn.on_click(self._add_rule)
+        self.slice_clear_btn.on_click(self._clear_rules)
+        self.slice_apply_btn.on_click(self._apply_slicing)
+
 
         # Independent watchers
         self.color_source.param.watch(self._on_color_source_change, "value")
@@ -166,7 +198,121 @@ class VizController:
 
         self._on_color_source_change()
 
+
+    # ---------- Slicing ----------
+    def _get_master_df(self) -> pd.DataFrame:
+        dfs = []
+        if self.H_df is not None and not self.H_df.empty:
+            dfs.append(self.H_df.copy())
+            
+        try:
+            meta = pd.DataFrame(self.meta_table.value)
+            if not meta.empty and "sample" in meta.columns:
+                m = meta.set_index("sample")
+                m.index = m.index.astype(str)
+                dfs.append(m)
+        except Exception:
+            pass
+            
+        if self.diversity_df is not None and not self.diversity_df.empty:
+            dfs.append(self.diversity_df.copy())
+            
+        if not dfs: return None
+        master = dfs[0]
+        for d in dfs[1:]:
+            master = master.merge(d, left_index=True, right_index=True, how='outer', suffixes=("", "_dup"))
+        return master.loc[:, ~master.columns.duplicated()].copy()
+
+    def _update_slice_options(self):
+        mdf = self._get_master_df()
+        if mdf is not None:
+            cols = list(mdf.columns)
+            self.slice_col.options = cols
+            if cols and self.slice_col.value not in cols:
+                self.slice_col.value = cols[0]
+            self._update_slicing_ui()
+
+    def _update_slicing_ui(self, event=None):
+        mdf = self._get_master_df()
+        if mdf is None or not self.slice_col.value: return
+        is_cat = (self.slice_type.value == "Categorical")
+        self.slice_val_cat.visible = is_cat
+        self.slice_val_cont_min.visible = not is_cat
+        self.slice_val_cont_max.visible = not is_cat
+        
+        col = self.slice_col.value
+        if is_cat:
+            cats = [str(x) for x in mdf[col].dropna().unique()]
+            self.slice_val_cat.options = cats
+            self.slice_val_cat.value = []
+        else:
+            try:
+                numeric_series = pd.to_numeric(mdf[col], errors='coerce').dropna()
+                self.slice_val_cont_min.value = float(numeric_series.min()) if not numeric_series.empty else 0.0
+                self.slice_val_cont_max.value = float(numeric_series.max()) if not numeric_series.empty else 100.0
+            except:
+                pass
+
+    def _add_rule(self, event):
+        if not self.slice_col.value: return
+        
+        is_cat = (self.slice_type.value == "Categorical")
+        if is_cat:
+            if not self.slice_val_cat.value: return
+            self.rules.append({
+                "col": self.slice_col.value,
+                "type": "categorical",
+                "categories": list(self.slice_val_cat.value)
+            })
+        else:
+            self.rules.append({
+                "col": self.slice_col.value,
+                "type": "continuous",
+                "min": self.slice_val_cont_min.value,
+                "max": self.slice_val_cont_max.value
+            })
+        self._update_rules_display()
+
+    def _clear_rules(self, event):
+        self.rules = []
+        self.sliced_df = None
+        self._update_rules_display()
+        
+    def _update_rules_display(self):
+        if not self.rules:
+            self.slice_rules_md.object = "**Active Rules:** None"
+            return
+            
+        md = "**Active Rules (AND Logic):**\\n"
+        for i, r in enumerate(self.rules):
+            if r["type"] == "categorical":
+                md += f"- **{r['col']}** is in `{r['categories']}`\\n"
+            else:
+                md += f"- **{r['col']}** between `{r['min']}` and `{r['max']}`\\n"
+        self.slice_rules_md.object = md
+
+    def _apply_slicing(self, event):
+        df = self._get_master_df()
+        if df is None: return
+        
+        for r in self.rules:
+            if r["type"] == "categorical":
+                df = df[df[r["col"]].astype(str).isin(r["categories"])]
+            else:
+                df[r["col"]] = pd.to_numeric(df[r["col"]], errors='coerce')
+                df = df[(df[r["col"]] >= r["min"]) & (df[r["col"]] <= r["max"])]
+                
+        self.sliced_df = df.copy()
+        self.status.object = f"**Data Sliced:** {len(self.sliced_df)} samples remain."
+        self._refresh_all()
+
+    def _get_valid_samples(self):
+        if self.sliced_df is not None:
+            return list(map(str, self.sliced_df.index))
+        return self.samples
+
     # ---------- External API ----------
+
     def set_input(self, H_df: pd.DataFrame) -> None:
         self.H_df = H_df.copy()
         self.samples = list(map(str, self.H_df.index.astype(str)))
@@ -178,8 +324,10 @@ class VizController:
         self.section.visible = True
         self.status.object = ok("NMF loadings received. Enter/upload metadata, then click **Visualize**.")
         self.pca_pane.object = None; self.mds_pane.object = None; self.tsne_pane.object = None
+        self._update_slice_options()
         # if we already have diversity metrics, populate choices
         self._populate_div_metric_choices()
+        self._update_slice_options()
 
     def _on_load_nmf_csv(self, event):
         if not self.nmf_file.value:
@@ -213,6 +361,7 @@ class VizController:
             df_.index = list(map(str, df_.index))
             self.diversity_df = df_
         self._populate_div_metric_choices()
+        self._update_slice_options()
 
     # ---------- internals ----------
     def _populate_div_metric_choices(self):
@@ -315,6 +464,7 @@ class VizController:
         self.meta_table.columns = cols
         
         self.status.object = ok("Metadata loaded. You can edit cells directly in the table.")
+        self._update_slice_options()
 
 
     def _update_pca(self):
@@ -327,7 +477,11 @@ class VizController:
             from CEtools import pca_viz as pv
             from sklearn.decomposition import PCA
 
-            X = cet.prepare_features(self.H_df, row_norm="l1", zscore_cols=True)
+            valid_samples = self._get_valid_samples()
+            H_subset = self.H_df.loc[self.H_df.index.isin(valid_samples)].copy()
+            if H_subset.empty: return
+            
+            X = cet.prepare_features(H_subset, row_norm="l1", zscore_cols=True)
             ncom = int(self.pca_n.value)
             pcx  = int(self.pca_x.value)
             pcy  = int(self.pca_y.value)
@@ -337,7 +491,7 @@ class VizController:
             scores = pca.fit_transform(X)
             ix, iy = pcx - 1, pcy - 1
             x = scores[:, ix]; y = scores[:, iy]
-            labels = np.array(list(map(str, self.H_df.index.astype(str))))
+            labels = np.array(list(map(str, H_subset.index.astype(str))))
 
             def _add_ellipses(p_fig, x_vals, y_vals, c_vals, cmap):
                 for c in set(c_vals):
@@ -494,9 +648,14 @@ class VizController:
         cat = (self.meta_mode.value == "categorical")
         try:
             import CEtools as cet
+            
+            valid_samples = self._get_valid_samples()
+            H_subset = self.H_df.loc[self.H_df.index.isin(valid_samples)].copy()
+            if H_subset.empty: return
+
             with no_bokeh_show():
                 coords, _, mds_fig = cet.embed_with_mds(
-                    self.H_df,
+                    H_subset,
                     metric=str(self.mds_metric.value),
                     row_norm="l1",
                     zscore_cols=True,
@@ -513,7 +672,7 @@ class VizController:
                         if leg in pos: pos.remove(leg)
                 
                 x, y = coords[:, 0], coords[:, 1]
-                labels = np.array(list(map(str, self.H_df.index.astype(str))))
+                labels = np.array(list(map(str, H_subset.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
                 from bokeh.palettes import Category10, Magma256
@@ -553,9 +712,14 @@ class VizController:
         cat = (self.meta_mode.value == "categorical")
         try:
             import CEtools as cet
+            
+            valid_samples = self._get_valid_samples()
+            H_subset = self.H_df.loc[self.H_df.index.isin(valid_samples)].copy()
+            if H_subset.empty: return
+
             with no_bokeh_show():
                 coords, _, tsne_fig = cet.embed_with_tsne(
-                    self.H_df,
+                    H_subset,
                     perplexity=float(self.tsne_perp.value),
                     metric=str(self.tsne_metric.value),
                     row_norm="l1",
@@ -574,7 +738,7 @@ class VizController:
                         if leg in pos: pos.remove(leg)
                 
                 x, y = coords[:, 0], coords[:, 1]
-                labels = np.array(list(map(str, self.H_df.index.astype(str))))
+                labels = np.array(list(map(str, H_subset.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
                 from bokeh.palettes import Category10, Magma256
