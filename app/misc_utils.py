@@ -50,6 +50,41 @@ class MiscController:
         self.preview_pane = pn.pane.DataFrame(pd.DataFrame(), max_height=200, sizing_mode="stretch_width", visible=False)
         self.status = pn.pane.Markdown("")
         
+        # Data Slicing
+        self.rules = []
+        self.sliced_df = None
+        
+        self.slice_col = pn.widgets.Select(name="Variable to slice by", options=[], width=200)
+        self.slice_type = pn.widgets.RadioButtonGroup(name="Type", options=["Categorical", "Continuous"], value="Categorical")
+        
+        self.slice_cat_val = pn.widgets.MultiChoice(name="Categories to Keep", options=[], width=400)
+        self.slice_cont_min = pn.widgets.FloatInput(name="Min", width=100)
+        self.slice_cont_max = pn.widgets.FloatInput(name="Max", width=100)
+        
+        self.slice_input_area = pn.Row(self.slice_cat_val) # dynamic
+        
+        self.slice_add_btn = pn.widgets.Button(name="Add Rule", button_type="primary", width=100)
+        self.slice_clear_btn = pn.widgets.Button(name="Clear Rules", button_type="danger", width=100)
+        self.slice_apply_btn = pn.widgets.Button(name="Apply Filters", button_type="success", width=150)
+        
+        self.slice_rules_pane = pn.pane.Markdown("**Active Rules:** None", sizing_mode="stretch_width")
+        self.slice_status = pn.pane.Markdown("")
+        
+        self.slice_download_btn = pn.widgets.FileDownload(
+            filename="sliced_data.csv",
+            button_type="primary",
+            name="Download Sliced CSV",
+            visible=False,
+            width=200
+        )
+        
+        self.slice_col.param.watch(self._update_slicing_ui, "value")
+        self.slice_type.param.watch(self._update_slicing_ui, "value")
+        self.slice_add_btn.on_click(self._add_rule)
+        self.slice_clear_btn.on_click(self._clear_rules)
+        self.slice_apply_btn.on_click(self._apply_slicing)
+
+        
         # Continuous vs Continuous
         self.cvc_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cvc_btn.on_click(self._update_cvc)
@@ -91,6 +126,12 @@ class MiscController:
             pn.Row(self.merge_btn, self.status),
             self.preview_pane,
             pn.layout.Divider(),
+            pn.pane.Markdown("### Data Slicing"),
+            pn.Row(self.slice_col, pn.Column("Type:", self.slice_type), self.slice_input_area, pn.Column("", self.slice_add_btn)),
+            self.slice_rules_pane,
+            pn.Row(self.slice_apply_btn, self.slice_clear_btn, self.slice_download_btn),
+            self.slice_status,
+            pn.layout.Divider(),
             pn.Row(self.svg_export),
             pn.pane.Markdown("### Continuous vs Continuous"),
             pn.Row(self.cvc_x, self.cvc_y, self.cvc_color, pn.Column("Color mode:", self.cvc_color_mode)),
@@ -109,6 +150,85 @@ class MiscController:
             self.reg_plot_pane,
             sizing_mode="stretch_width"
         )
+
+    def _get_df(self):
+        if getattr(self, 'sliced_df', None) is not None:
+            return self.sliced_df
+        return self.master_df
+
+    def _update_slicing_ui(self, *_):
+        if self.master_df is None or not self.slice_col.value: return
+        
+        col = self.slice_col.value
+        if self.slice_type.value == "Categorical":
+            unique_vals = [str(x) for x in self.master_df[col].dropna().unique()]
+            self.slice_cat_val.options = sorted(unique_vals)
+            self.slice_cat_val.value = []
+            self.slice_input_area[:] = [self.slice_cat_val]
+        else:
+            s = pd.to_numeric(self.master_df[col], errors='coerce').dropna()
+            if not s.empty:
+                self.slice_cont_min.value = float(s.min())
+                self.slice_cont_max.value = float(s.max())
+            self.slice_input_area[:] = [self.slice_cont_min, self.slice_cont_max]
+
+    def _add_rule(self, *_):
+        if not self.slice_col.value: return
+        col = self.slice_col.value
+        stype = self.slice_type.value
+        
+        if stype == "Categorical":
+            vals = self.slice_cat_val.value
+            if not vals: return
+            self.rules.append({
+                "col": col, "type": "Categorical", "vals": vals,
+                "desc": f"`{col}` in {vals}"
+            })
+        else:
+            vmin = self.slice_cont_min.value
+            vmax = self.slice_cont_max.value
+            if vmin is None or vmax is None: return
+            self.rules.append({
+                "col": col, "type": "Continuous", "min": vmin, "max": vmax,
+                "desc": f"{vmin} <= `{col}` <= {vmax}"
+            })
+            
+        self._update_rules_display()
+        
+    def _clear_rules(self, *_):
+        self.rules = []
+        self._update_rules_display()
+        
+    def _update_rules_display(self):
+        if not self.rules:
+            self.slice_rules_pane.object = "**Active Rules:** None"
+        else:
+            lines = ["**Active Rules:**"]
+            for i, r in enumerate(self.rules):
+                lines.append(f"{i+1}. {r['desc']}")
+            self.slice_rules_pane.object = "\n".join(lines)
+
+    def _apply_slicing(self, *_):
+        if self.master_df is None: return
+        
+        df = self.master_df.copy()
+        for r in self.rules:
+            col = r["col"]
+            if r["type"] == "Categorical":
+                df = df[df[col].astype(str).isin(r["vals"])]
+            else:
+                s = pd.to_numeric(df[col], errors='coerce')
+                df = df[(s >= r["min"]) & (s <= r["max"])]
+                
+        self.sliced_df = df.copy()
+        self.slice_status.object = f"**Sliced dataframe created:** {len(self.sliced_df)} rows remaining (from {len(self.master_df)})."
+        self.preview_pane.object = self.sliced_df.head(10)
+        
+        sio = io.BytesIO()
+        self.sliced_df.to_csv(sio)
+        sio.seek(0)
+        self.slice_download_btn.file = sio
+        self.slice_download_btn.visible = True
 
     def _read_file(self, file_input):
         if not file_input.value: return None
@@ -159,6 +279,10 @@ class MiscController:
         if self.master_df is None: return
         self.preview_pane.object = self.master_df.head(10)
         self.preview_pane.visible = True
+        self.sliced_df = None
+        self._clear_rules()
+        self.slice_status.object = ""
+        self.slice_download_btn.visible = False
         
         cols = list(self.master_df.columns)
         num_cols = []
@@ -190,11 +314,16 @@ class MiscController:
         if cols:
             self.cat_x.value = cols[0]
             
+        self.slice_col.options = cols
+        if cols: self.slice_col.value = cols[0]
+        self._update_slicing_ui()
+            
         # Do not automatically update plots here. Let user hit Visualize.
 
     def _update_cvc(self, *_):
         self.cvc_plot_pane.object = None
-        if self.master_df is None or self.master_df.empty:
+        df_source = self._get_df()
+        if df_source is None or df_source.empty:
             self.cvc_stats_pane.object = "**Error: No data available.**"
             return
         if not self.cvc_x.value or not self.cvc_y.value:
@@ -204,15 +333,15 @@ class MiscController:
         y_col = self.cvc_y.value
         color_col = self.cvc_color.value
         
-        x_s = pd.to_numeric(self.master_df[x_col], errors='coerce')
+        x_s = pd.to_numeric(df_source[x_col], errors='coerce')
         if isinstance(x_s, pd.DataFrame): x_s = x_s.iloc[:, 0]
-        y_s = pd.to_numeric(self.master_df[y_col], errors='coerce')
+        y_s = pd.to_numeric(df_source[y_col], errors='coerce')
         if isinstance(y_s, pd.DataFrame): y_s = y_s.iloc[:, 0]
         
         df = pd.DataFrame({x_col: x_s, y_col: y_s})
         
-        if color_col is not None and color_col != "None" and color_col in self.master_df.columns:
-            c_s = self.master_df[color_col]
+        if color_col is not None and color_col != "None" and color_col in df_source.columns:
+            c_s = df_source[color_col]
             if isinstance(c_s, pd.DataFrame): c_s = c_s.iloc[:, 0]
             df[color_col] = c_s
         else:
@@ -311,7 +440,8 @@ class MiscController:
 
     def _update_cat(self, *_):
         self.cat_plot_pane.object = None
-        if self.master_df is None or self.master_df.empty:
+        df_source = self._get_df()
+        if df_source is None or df_source.empty:
             return
         if not self.cat_x.value or not self.cat_y.value:
             return
@@ -319,9 +449,9 @@ class MiscController:
         x_col = self.cat_x.value
         y_col = self.cat_y.value
         
-        x_s = self.master_df[x_col]
+        x_s = df_source[x_col]
         if isinstance(x_s, pd.DataFrame): x_s = x_s.iloc[:, 0]
-        y_s = pd.to_numeric(self.master_df[y_col], errors='coerce')
+        y_s = pd.to_numeric(df_source[y_col], errors='coerce')
         if isinstance(y_s, pd.DataFrame): y_s = y_s.iloc[:, 0]
         
         df = pd.DataFrame({x_col: x_s.astype(str), y_col: y_s})
@@ -409,7 +539,8 @@ class MiscController:
         from scipy import stats
         import math
         
-        if self.master_df is None or self.master_df.empty:
+        df_source = self._get_df()
+        if df_source is None or df_source.empty:
             self.reg_status.object = "**Error: No data available.**"
             return
             
@@ -422,7 +553,7 @@ class MiscController:
         for i, v1 in enumerate(vars):
             for j, v2 in enumerate(vars):
                 if i > j: # Half square (lower triangle)
-                    df_pair = self.master_df[[v1, v2]].dropna()
+                    df_pair = df_source[[v1, v2]].dropna()
                     if len(df_pair) < 3:
                         data.append({'var1': v1, 'var2': v2, 'r': np.nan, 'p': np.nan})
                         continue
