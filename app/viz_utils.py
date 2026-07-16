@@ -315,7 +315,8 @@ class VizController:
 
     def set_input(self, H_df: pd.DataFrame) -> None:
         self.H_df = H_df.copy()
-        self.samples = list(map(str, self.H_df.index.astype(str)))
+        self.H_df.index = self.H_df.index.astype(str)
+        self.samples = list(self.H_df.index)
         df = pd.DataFrame({"sample": self.samples, "metadata": [None] * len(self.samples)})
         self.meta_table.value = df
         self.metadata_df = df
