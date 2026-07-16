@@ -9,6 +9,8 @@ from bokeh.palettes import Category10, Magma256
 class TimeSeriesController:
     def __init__(self):
         self.master_df = None
+        self.sliced_df = None
+        self.rules = []
         
         # Uploads
         self.loadings_file = pn.widgets.FileInput(accept=".csv,.xlsx", name="Loadings")
@@ -38,8 +40,31 @@ class TimeSeriesController:
         
         self.plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=600)
         
+        # Slicing UI
+        self.slice_col = pn.widgets.Select(name="Variable to Slice By", options=[])
+        self.slice_type = pn.widgets.RadioButtonGroup(name="Type", options=["Categorical", "Continuous"], value="Categorical")
+        self.slice_val_cat = pn.widgets.MultiChoice(name="Categories to Include", options=[], visible=True)
+        self.slice_val_cont_min = pn.widgets.FloatInput(name="Min Value", value=0.0, visible=False)
+        self.slice_val_cont_max = pn.widgets.FloatInput(name="Max Value", value=100.0, visible=False)
+        self.slice_add_btn = pn.widgets.Button(name="Add Rule", button_type="primary")
+        self.slice_clear_btn = pn.widgets.Button(name="Clear Rules", button_type="danger")
+        self.slice_apply_btn = pn.widgets.Button(name="Apply Filters", button_type="success")
+        self.slice_rules_md = pn.pane.Markdown("**Active Rules:** None", sizing_mode="stretch_width")
+        
+        self.slice_download = pn.widgets.FileDownload(
+            filename="sliced_timeseries_data.csv",
+            callback=self._get_sliced_csv,
+            button_type="success",
+            visible=False
+        )
+        
         # Watchers
         self.ts_x_type.param.watch(self._toggle_x_order, 'value')
+        self.slice_col.param.watch(self._update_slicing_ui, 'value')
+        self.slice_type.param.watch(self._update_slicing_ui, 'value')
+        self.slice_add_btn.on_click(self._add_rule)
+        self.slice_clear_btn.on_click(self._clear_rules)
+        self.slice_apply_btn.on_click(self._apply_slicing)
         
         self.section = pn.Column(
             pn.pane.Markdown("## Time Series Plot\nUpload standalone files, or let the session automatically bridge generated data here."),
@@ -52,7 +77,13 @@ class TimeSeriesController:
             pn.Row(self.merge_btn, self.status),
             self.preview_pane,
             pn.layout.Divider(),
-            pn.pane.Markdown("### 2. Time Series Configuration"),
+            pn.pane.Markdown("### 2. Subset Data (Optional)"),
+            pn.Row(self.slice_col, pn.Column("Type:", self.slice_type)),
+            pn.Row(self.slice_val_cat, self.slice_val_cont_min, self.slice_val_cont_max),
+            pn.Row(self.slice_add_btn, self.slice_clear_btn, self.slice_apply_btn, self.slice_download),
+            self.slice_rules_md,
+            pn.layout.Divider(),
+            pn.pane.Markdown("### 3. Time Series Configuration"),
             pn.Row(self.ts_x, pn.Column("Time variable type:", self.ts_x_type), self.ts_x_order),
             pn.Row(self.ts_y, self.ts_y_mode, self.ts_patient, self.ts_color),
             pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn),
@@ -62,6 +93,92 @@ class TimeSeriesController:
 
     def _toggle_x_order(self, event):
         self.ts_x_order.visible = (self.ts_x_type.value == "Categorical")
+
+    def _get_sliced_csv(self):
+        if self.sliced_df is not None:
+            sio = io.BytesIO()
+            self.sliced_df.to_csv(sio)
+            sio.seek(0)
+            return sio
+        return None
+
+    def _update_slicing_ui(self, event=None):
+        if self.master_df is None or not self.slice_col.value: return
+        is_cat = (self.slice_type.value == "Categorical")
+        self.slice_val_cat.visible = is_cat
+        self.slice_val_cont_min.visible = not is_cat
+        self.slice_val_cont_max.visible = not is_cat
+        
+        col = self.slice_col.value
+        if is_cat:
+            cats = [str(x) for x in self.master_df[col].dropna().unique()]
+            self.slice_val_cat.options = cats
+            self.slice_val_cat.value = []
+        else:
+            try:
+                numeric_series = pd.to_numeric(self.master_df[col], errors='coerce').dropna()
+                self.slice_val_cont_min.value = float(numeric_series.min()) if not numeric_series.empty else 0.0
+                self.slice_val_cont_max.value = float(numeric_series.max()) if not numeric_series.empty else 100.0
+            except:
+                pass
+
+    def _add_rule(self, event):
+        if not self.slice_col.value: return
+        
+        is_cat = (self.slice_type.value == "Categorical")
+        if is_cat:
+            if not self.slice_val_cat.value: return
+            self.rules.append({
+                "col": self.slice_col.value,
+                "type": "categorical",
+                "categories": list(self.slice_val_cat.value)
+            })
+        else:
+            self.rules.append({
+                "col": self.slice_col.value,
+                "type": "continuous",
+                "min": self.slice_val_cont_min.value,
+                "max": self.slice_val_cont_max.value
+            })
+        self._update_rules_display()
+
+    def _clear_rules(self, event):
+        self.rules = []
+        self._update_rules_display()
+        
+    def _update_rules_display(self):
+        if not self.rules:
+            self.slice_rules_md.object = "**Active Rules:** None"
+            return
+            
+        md = "**Active Rules (AND Logic):**\n"
+        for i, r in enumerate(self.rules):
+            if r["type"] == "categorical":
+                md += f"- **{r['col']}** is in `{r['categories']}`\n"
+            else:
+                md += f"- **{r['col']}** between `{r['min']}` and `{r['max']}`\n"
+        self.slice_rules_md.object = md
+
+    def _apply_slicing(self, event):
+        if self.master_df is None: return
+        df = self.master_df.copy()
+        
+        for r in self.rules:
+            if r["type"] == "categorical":
+                df = df[df[r["col"]].astype(str).isin(r["categories"])]
+            else:
+                df[r["col"]] = pd.to_numeric(df[r["col"]], errors='coerce')
+                df = df[(df[r["col"]] >= r["min"]) & (df[r["col"]] <= r["max"])]
+                
+        self.sliced_df = df.copy()
+        self.slice_download.visible = True
+        self.status.object = f"**Data Sliced:** {len(self.sliced_df)} samples remain."
+        self._on_visualize(None)
+
+    def _get_df(self) -> pd.DataFrame:
+        if self.sliced_df is not None:
+            return self.sliced_df
+        return self.master_df
 
     def _read_file(self, file_input):
         if not file_input.value: return None
@@ -114,19 +231,25 @@ class TimeSeriesController:
         self.preview_pane.visible = True
         
         cols = list(self.master_df.columns)
+        self.slice_col.options = cols
+        
         self.ts_x.options = cols
         self.ts_y.options = cols
         self.ts_patient.options = cols
         self.ts_color.options = ["None"] + cols
         
         if cols:
+            self.slice_col.value = cols[0]
             self.ts_x.value = cols[0]
             self.ts_y.value = cols[0]
             self.ts_patient.value = cols[0]
+        self._update_slicing_ui()
 
     def _on_visualize(self, event):
         self.plot_pane.object = None
-        if self.master_df is None or not self.ts_x.value or not self.ts_y.value or not self.ts_patient.value:
+        current_df = self._get_df()
+        
+        if current_df is None or not self.ts_x.value or not self.ts_y.value or not self.ts_patient.value:
             return
             
         x_col = self.ts_x.value
@@ -135,9 +258,9 @@ class TimeSeriesController:
         p_col = self.ts_patient.value
         color_col = self.ts_color.value
         
-        df = self.master_df[[x_col, y_col, p_col]].copy()
+        df = current_df[[x_col, y_col, p_col]].copy()
         if color_col != "None":
-            df[color_col] = self.master_df[color_col]
+            df[color_col] = current_df[color_col]
         df = df.dropna()
         if df.empty:
             self.status.object = "**Warning:** Plotting data is empty after removing NaNs."
