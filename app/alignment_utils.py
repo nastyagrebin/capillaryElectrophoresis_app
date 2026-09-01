@@ -11,6 +11,7 @@ import bokeh.plotting
 import bokeh.models
 from bokeh.palettes import Category10, Turbo256
 from bokeh.models import BoxAnnotation
+from common_plot import apply_export_prefix_to_pane, TitledPlotPane
 
 OK = "OK:"; WARN = "Warning:"
 def ok(m:str)->str: return f"{OK} {m}"
@@ -42,7 +43,7 @@ class AlignmentController:
         self._anchors_per_sample: Dict[str, List[Tuple[float,float]]] = {}
 
         # ---------- UI widgets ----------
-        self.n_anchors_input = pn.widgets.IntInput(name="Number of anchors", value=5, start=2, end=20)
+        self.n_anchors_input = pn.widgets.IntInput(name="Number of anchors", value=3, start=2, end=20)
         self.start_btn       = pn.widgets.Button(name="Start anchor selection", button_type="primary", disabled=True)
         self.use_sel_btn     = pn.widgets.Button(
             name="Use selected range for THIS anchor (all samples)",
@@ -85,7 +86,7 @@ class AlignmentController:
 
         # Aligned preview
         self.aligned_fig: Optional[bokeh.plotting.Figure] = None
-        self.aligned_pane = pn.pane.Bokeh(height=420, sizing_mode="stretch_width")
+        self.aligned_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # File upload for preprocessed CSV
         self.file_input = pn.widgets.FileInput(accept=".csv", multiple=False)
@@ -122,7 +123,8 @@ class AlignmentController:
         self.align_mode.param.watch(self._update_visibility, "value")
 
         # ---------- Layout ----------
-        self._figure_row_placeholder = pn.Row(sizing_mode="stretch_width")
+        self.selection_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self._figure_row_placeholder = pn.Row(self.selection_pane, sizing_mode="stretch_width")
         self._exports_row = pn.Row(pn.Column(self.csv_name, self.csv_download), sizing_mode="stretch_width")
         self.section = pn.Column(
             pn.pane.Markdown("## 3) Alignment"),
@@ -181,12 +183,9 @@ class AlignmentController:
         self._samples = list(self.input_by_sample.keys())
         self._times = self.input_by_sample[self._samples[0]]["time"].to_numpy()
 
+        from common_plot import _palette
         n = len(self._samples)
-        if n <= 10:
-            self._colors = list(Category10[10])[:n]
-        else:
-            idxs = np.linspace(0, 255, num=n, dtype=int)
-            self._colors = [Turbo256[i] for i in idxs]
+        self._colors = _palette(n)
 
         self._anchor_idx = 0
         self._N = 0
@@ -259,6 +258,11 @@ class AlignmentController:
         p.add_layout(sel_box)
         self.sel_box = sel_box
 
+        for src in self.scatter_sources.values():
+            try:
+                src.remove_on_change("indices", self._on_selection_change)
+            except Exception:
+                pass
         self.scatter_sources.clear()
         self.anchor_sources.clear()
         for i, s in enumerate(self._samples):
@@ -289,7 +293,10 @@ class AlignmentController:
             leg.label_text_font_size = "9pt"
             leg.ncols = ncols
         
-        self._figure_row_placeholder.objects = [p]
+        self.selection_pane.object = p
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.selection_pane, prefix)
         self.fig = p
         self._refresh_anchor_dots()
 
@@ -414,6 +421,7 @@ class AlignmentController:
         self.refine_sample.disabled = True
         self.set_sample_btn.disabled = True
         self.info.object = f"**Anchor 1 / {self._N}** — Box-select a region, apply to all, then refine specific samples if needed."
+        self.status.object = ok(f"Anchor selection started. Please draw a box on the plot for Anchor 1.")
 
     def _on_use_selection(self, _=None):
         xr = self._compute_selected_xrange()
@@ -657,6 +665,9 @@ class AlignmentController:
 
         self.aligned_fig = fig
         self.aligned_pane.object = fig
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.aligned_pane, prefix)
 
     # ---------- Public hooks ----------
     def add_aligned_listener(self, fn: Callable[[Dict[str, pd.DataFrame]], None]):

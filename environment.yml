@@ -13,4 +13,5 @@ dependencies:
   - netCDF4
   - pip
   - pip:
- 
+      - colorcet
+      - cmcrameri

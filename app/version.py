@@ -1,2 +1,1 @@
-# Auto-updated by git post-commit hook
-APP_VERSION = "v2.0.8"
+APP_VERSION = "v2.2.1"

@@ -9,7 +9,7 @@ import panel as pn
 import bokeh.plotting
 from bokeh.models import Range1d
 from bokeh.palettes import Category10, Turbo256
-from common_plot import plot_multi
+from common_plot import plot_multi, TitledPlotPane
 
 pn.extension("bokeh")  # safe no-op if already initialized
 
@@ -78,8 +78,8 @@ class BaselineController:
     preproc_offset: pn.widgets.FloatSlider = field(default_factory=lambda: pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width"))
     asinh_toggle: pn.widgets.Checkbox = field(default_factory=lambda: pn.widgets.Checkbox(name="Use asinh transform", value=True))
 
-    before_pane: pn.pane.Bokeh     = field(default_factory=lambda: pn.pane.Bokeh(sizing_mode="stretch_width"))
-    after_pane: pn.pane.Bokeh      = field(default_factory=lambda: pn.pane.Bokeh(sizing_mode="stretch_width"))
+    before_pane: TitledPlotPane = field(default_factory=lambda: TitledPlotPane(sizing_mode="stretch_width"))
+    after_pane: TitledPlotPane = field(default_factory=lambda: TitledPlotPane(sizing_mode="stretch_width"))
 
     export_name: pn.widgets.TextInput   = field(default_factory=lambda: pn.widgets.TextInput(name="CSV filename", value="baseline_subtracted.csv", width=260))
     export_btn: pn.widgets.FileDownload = field(default_factory=lambda: pn.widgets.FileDownload(label="Export CSV", filename="baseline_subtracted.csv", button_type="primary", embed=False, auto=False, callback=lambda: None, disabled=True))

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import panel as pn
 import bokeh.plotting  
-from common_plot import plot_multi
+from common_plot import apply_export_prefix_to_pane, plot_multi, TitledPlotPane
 
 OK = "OK:"
 WARN = "Warning:"
@@ -33,8 +33,8 @@ class DespikeController:
         self.skip_btn    = pn.widgets.Button(name="Skip despiking (use input)", button_type="danger", disabled=True)
 
         # Panes
-        self.before_pane = pn.pane.Bokeh(sizing_mode="stretch_width")
-        self.after_pane  = pn.pane.Bokeh(sizing_mode="stretch_width")
+        self.before_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.after_pane  = TitledPlotPane(sizing_mode="stretch_width")
 
         # Export
         self.export_name = pn.widgets.TextInput(name="Despiked filename", value="despiked_merged.csv", width=300)

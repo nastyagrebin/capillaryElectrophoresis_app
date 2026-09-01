@@ -453,7 +453,7 @@ def enable_notebook(bokeh_backend: bool = True, holoviews_backend: bool = True) 
         _hv.extension("bokeh")
 
 
-def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
+def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame, cmap: Optional[List[str]] = None) -> Tuple[bokeh.plotting.Figure, List[str]]:
     import bokeh.models
     import bokeh.plotting
     import bokeh.palettes
@@ -464,7 +464,7 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
         index=H_df.index, columns=H_df.columns
     )
 
-    samples = list(Z.index.astype(str))
+    samples = [str(s)[:10] for s in Z.index]
     comps = list(Z.columns.astype(str))
     n_rows, n_cols = Z.shape
 
@@ -475,8 +475,9 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
             xs.append(j); ys.append(i); vals.append(float(row_vals[j]))
             s_labels.append(s); c_labels.append(c)
 
+    if cmap is None: cmap = bokeh.palettes.Magma256
     mapper = bokeh.models.LinearColorMapper(
-        palette=bokeh.palettes.Magma256,
+        palette=cmap,
         low=float(np.nanmin(vals)),
         high=float(np.nanmax(vals))
     )
@@ -509,9 +510,8 @@ def plot_loadings_heatmap_bokeh(H_df: pd.DataFrame) -> pd.DataFrame:
 
 
     color_bar = bokeh.models.ColorBar(
-        title="loading weight",
         color_mapper=mapper,
-        ticker=bokeh.models.FixedTicker(),
+        ticker=bokeh.models.BasicTicker(),
         formatter=bokeh.models.PrintfTickFormatter(format="%.2f"),
         label_standoff=8, location=(0, 0),
     )
@@ -532,13 +532,18 @@ def plot_loadings_heatmap_clustered_bokeh(
     metric_cols: str = "cosine",
     method_cols: str = "average",
     title: Optional[str] = None,
-) -> Tuple[pd.DataFrame, List[int], List[int]]:
+    cmap: Optional[List[str]] = None,
+) -> Tuple[pd.DataFrame, List[int], List[int], bokeh.plotting.Figure]:
     import bokeh.plotting
     from bokeh.models import (ColumnDataSource, LinearColorMapper, ColorBar,
-                              FixedTicker, PrintfTickFormatter)
+                              BasicTicker, PrintfTickFormatter, FixedTicker)
     from bokeh.palettes import Magma256
     from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import pairwise_distances
+    import numpy as np
+
+    if cmap is None:
+        cmap = Magma256
 
     def _zscore_cols(df: pd.DataFrame) -> pd.DataFrame:
         Z = StandardScaler(with_mean=True, with_std=True).fit_transform(df.values)
@@ -580,12 +585,12 @@ def plot_loadings_heatmap_clustered_bokeh(
     )
     Zr = Z_df.iloc[row_order, :].iloc[:, col_order]
 
-    samples = Zr.index.astype(str).tolist()
+    samples = [str(s)[:10] for s in Zr.index]
     comps = Zr.columns.astype(str).tolist()
     n_rows, n_cols = Zr.shape
 
     xs, ys, vals, s_labels, c_labels = [], [], [], [], []
-    for i, s in enumerate(samples):
+    for i, s in enumerate(Zr.index.astype(str)):
         row_vals = Zr.iloc[i].values
         for j, c in enumerate(comps):
             xs.append(j); ys.append(i); vals.append(float(row_vals[j]))
@@ -596,7 +601,7 @@ def plot_loadings_heatmap_clustered_bokeh(
     if vmin == vmax:
         vmin -= 1e-12; vmax += 1e-12
 
-    mapper = LinearColorMapper(palette=Magma256, low=vmin, high=vmax)
+    mapper = LinearColorMapper(palette=cmap, low=vmin, high=vmax)
     src = ColumnDataSource(dict(x=xs, y=ys, val=vals, sample=s_labels, comp=c_labels))
 
     width = max(500, min(3 * n_cols, 1400))
@@ -613,13 +618,12 @@ def plot_loadings_heatmap_clustered_bokeh(
     p.yaxis.ticker = FixedTicker(ticks=list(range(n_rows)))
     p.yaxis.major_label_overrides = {i: samples[i] for i in range(n_rows)}
 
-    color_bar = ColorBar(color_mapper=mapper, ticker=FixedTicker(),
+    color_bar = ColorBar(color_mapper=mapper, ticker=BasicTicker(),
                          formatter=PrintfTickFormatter(format="%.2f"),
                          label_standoff=8, location=(0, 0))
     p.add_layout(color_bar, "right")
-    p.hover.tooltips = [("sample", "@sample"), ("component", "@comp"), ("z", "@val{0.00}")]
+    p.hover.tooltips = [("sample", "@sample"), ("component", "@comp"), ("value", "@val{0.00}")]
 
-    # bokeh.plotting.show(p)
     return Zr, row_order, col_order, p
 
 
@@ -633,6 +637,7 @@ def plot_reconstruction_overlays_bokeh(
     n_eval: int = 1000,
     title_prefix: str = "Sample",
     mask_range: Tuple[float, float] = (0.0, 1.0),
+    use_asinh: bool = False,
 ):
     import bokeh.plotting
 
@@ -653,7 +658,7 @@ def plot_reconstruction_overlays_bokeh(
     p = bokeh.plotting.figure(
         height=400, width=600,
         title=f"{title_prefix} {sample_name}: reconstruction",
-        x_axis_label="Pseudotime", y_axis_label="Intensity",
+        x_axis_label="Pseudotime", y_axis_label="Intensity (asinh)" if use_asinh else "Intensity",
         x_range=[lo, hi],
     )
 
@@ -664,8 +669,10 @@ def plot_reconstruction_overlays_bokeh(
         else:
             x_obs = pseudotimes_df[sample_name].values
             y_obs = norm_df[sample_name].values
+        if use_asinh: y_obs = np.arcsinh(y_obs)
         p.line(x=x_obs, y=y_obs, line_width=2, line_color="red", legend_label="original")
 
+    if use_asinh: yhat = np.arcsinh(yhat)
     p.line(x=t_eval, y=yhat, line_width=2, line_color="navy", legend_label="reconstruction")
     p.legend.click_policy = "hide"
     return p

@@ -6,3 +6,5 @@ scipy
 scikit-learn
 openpyxl
 netCDF4
+colorcet
+cmcrameri

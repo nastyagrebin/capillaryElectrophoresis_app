@@ -1,3 +1,5 @@
+LICENSE
+README.md
 pyproject.toml
 src/CEtools/__init__.py
 src/CEtools/filters.py

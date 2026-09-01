@@ -14,6 +14,8 @@ OK = "OK:"; WARN = "Warning:"
 def ok(m): return f"{OK} {m}"
 def warn(m): return f"{WARN} {m}"
 
+from common_plot import TitledPlotPane
+
 pn.extension('tabulator')
 
 @contextmanager
@@ -112,18 +114,19 @@ class VizController:
         self.pca_y = pn.widgets.IntInput(name="PC Y (1-based)", value=2, start=1, end=50, width=140)
         self.pls_x = pn.widgets.IntInput(name="LV X (1-based)", value=1, start=1, end=10, width=140)
         self.pls_y = pn.widgets.IntInput(name="LV Y (1-based)", value=2, start=1, end=10, width=140)
-        self.pca_pane = pn.Column(sizing_mode="stretch_width")
-        self.pca_scree_pane = pn.pane.Bokeh(height=350, sizing_mode="fixed")
-        self.pc_loadings_pane = pn.pane.Bokeh(height=380, sizing_mode="fixed")
-
+        self.pca_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.pls_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.pca_scree_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.pc_loadings_pane = TitledPlotPane(sizing_mode="stretch_width")
+        
         # ---- MDS controls/plot ----
         self.mds_metric = pn.widgets.Select(name="MDS metric", options=["cosine", "euclidean"], value="euclidean", width=160)
-        self.mds_pane = pn.pane.Bokeh(height=420, sizing_mode="fixed")
+        self.mds_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # ---- t-SNE controls/plot ----
         self.tsne_perp = pn.widgets.FloatSlider(name="t-SNE perplexity", start=5.0, end=50.0, step=1.0, value=9.0, width=280)
         self.tsne_metric = pn.widgets.Select(name="t-SNE metric", options=["cosine", "euclidean"], value="cosine", width=160)
-        self.tsne_pane = pn.pane.Bokeh(height=420, sizing_mode="fixed")
+        self.tsne_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # Layout
         self.section = pn.Column(
@@ -152,6 +155,7 @@ class VizController:
             pn.pane.Markdown("### PCA / PLS-DA of NMF loadings (colored)"),
             pn.Row(self.pca_n, pn.Spacer(width=10), self.pca_x, pn.Spacer(width=10), self.pca_y, pn.Spacer(width=10), self.pls_x, pn.Spacer(width=10), self.pls_y),
             self.pca_pane,
+            self.pls_pane,
             pn.pane.Markdown("#### PCA scree & PC loadings"),
             self.pca_scree_pane,
             self.pc_loadings_pane,
@@ -435,6 +439,15 @@ class VizController:
         self._update_mds()
         self._update_tsne()
         
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.pca_pane, prefix)
+        apply_export_prefix_to_pane(self.pls_pane, prefix)
+        apply_export_prefix_to_pane(self.pca_scree_pane, prefix)
+        apply_export_prefix_to_pane(self.pc_loadings_pane, prefix)
+        apply_export_prefix_to_pane(self.mds_pane, prefix)
+        apply_export_prefix_to_pane(self.tsne_pane, prefix)
+        
     def _on_load_file(self, _=None):
         self.status.object = "Loading metadata..."
         if not self.meta_file.value:
@@ -612,7 +625,12 @@ class VizController:
 
             p.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
             
-            self.pca_pane.objects = [p, pls_p] if pls_p is not None else [p]
+            self.pca_pane.object = p
+            self.pls_pane.object = pls_p
+            if pls_p is None:
+                self.pls_pane.visible = False
+            else:
+                self.pls_pane.visible = True
 
             # CEtools pca_viz subplots, suppress external show
             try:
@@ -635,6 +653,13 @@ class VizController:
             except Exception as e:
                 self.pc_loadings_pane.object = None
                 self.status.object = warn(f"PC loadings plot failed: {e}")
+
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.pca_pane, prefix)
+            apply_export_prefix_to_pane(self.pls_pane, prefix)
+            apply_export_prefix_to_pane(self.pca_scree_pane, prefix)
+            apply_export_prefix_to_pane(self.pc_loadings_pane, prefix)
 
         except Exception as e:
             self.pca_pane.object = None
@@ -702,6 +727,9 @@ class VizController:
                 mds_fig.title.text += f" — colored by {str(color_var)[:20]}"
                 
             self.mds_pane.object = mds_fig
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.mds_pane, prefix)
         except Exception as e:
             self.mds_pane.object = None
             self.status.object = warn(f"MDS failed: {e}")
@@ -768,6 +796,9 @@ class VizController:
                 tsne_fig.title.text += f" — colored by {str(color_var)[:20]}"
                 
             self.tsne_pane.object = tsne_fig
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.tsne_pane, prefix)
         except Exception as e:
             self.tsne_pane.object = None
             self.status.object = warn(f"t-SNE failed: {e}")

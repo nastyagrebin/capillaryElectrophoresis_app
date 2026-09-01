@@ -18,6 +18,7 @@ def warn(m): return f"{WARN} {m}"
 
 # UI needs Tabulator
 pn.extension('tabulator')
+from common_plot import TitledPlotPane
 
 
 # ============================== Data structures ==================================
@@ -633,7 +634,10 @@ class DiversityController:
                 p.ygrid.grid_line_color = None
                 plots.append(p)
                 
-            self.plots_column.objects = [pn.pane.Bokeh(p) for p in plots]
+            self.plots_column.objects = [TitledPlotPane(object=p, sizing_mode="stretch_width") for p in plots]
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.plots_column, prefix)
 
             # Notify Viz tab to add these metrics for coloring
             if callable(self.on_updated):

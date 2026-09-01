@@ -6,6 +6,7 @@ import pandas as pd
 import panel as pn
 from bokeh.models import ColumnDataSource, HoverTool, Range1d, LinearAxis, LogColorMapper, LinearColorMapper, CustomJSTickFormatter, ColorBar, CustomJS
 from bokeh.plotting import figure
+from common_plot import TitledPlotPane
 
 def _coerce_sid(x: pd.Series) -> pd.Series:
     def _clean(val):
@@ -118,7 +119,7 @@ def nmf_group_importance_dashboard_stable(
 
     stats_pane = pn.pane.DataFrame(stats.reset_index(), height=260, sizing_mode="stretch_width")
 
-    from bokeh.palettes import Reds, Blues
+    import common_plot
     
     K = len(basis_cols)
     basis_indices = np.arange(1, K + 1)
@@ -155,9 +156,9 @@ def nmf_group_importance_dashboard_stable(
     
     if min_q_gt0 > 0 and (max_q / min_q_gt0) > 100:
         plot_low = max(1e-10, min(0.01, min_q_gt0))
-        cmap = LogColorMapper(palette=Reds[9], low=plot_low, high=1.0)
+        cmap = LogColorMapper(palette=common_plot.get_continuous_palette(256), low=plot_low, high=1.0)
     else:
-        cmap = LinearColorMapper(palette=Reds[9], low=0, high=max_q if max_q > 0 else 1.0)
+        cmap = LinearColorMapper(palette=common_plot.get_continuous_palette(256), low=0, high=max_q if max_q > 0 else 1.0)
 
     sig_fig = figure(
         width=800, height=200,
@@ -225,9 +226,9 @@ def nmf_group_importance_dashboard_stable(
     
     if min_p_gt0 > 0 and (max_p / min_p_gt0) > 100:
         plot_low_p = max(1e-10, min(0.01, min_p_gt0))
-        cmap_p = LogColorMapper(palette=Blues[9], low=plot_low_p, high=1.0)
+        cmap_p = LogColorMapper(palette=common_plot.get_continuous_palette(256), low=plot_low_p, high=1.0)
     else:
-        cmap_p = LinearColorMapper(palette=Blues[9], low=0, high=max_p if max_p > 0 else 1.0)
+        cmap_p = LinearColorMapper(palette=common_plot.get_continuous_palette(256), low=0, high=max_p if max_p > 0 else 1.0)
 
     pval_fig = figure(
         width=800, height=200,
@@ -400,6 +401,7 @@ class NMFMetaDashboardController:
         self.run_btn.on_click(self._on_run)
 
         self.status = pn.pane.Markdown("", sizing_mode="stretch_width")
+        self.plot_pane = TitledPlotPane(sizing_mode="stretch_both")
         self.dashboard_pane = pn.Column(sizing_mode="stretch_width")
 
         self.view = pn.Column(
@@ -483,8 +485,8 @@ class NMFMetaDashboardController:
                         
         plot_df = pd.DataFrame(data)
         
-        from bokeh.palettes import RdBu
-        cmap = LinearColorMapper(palette=list(reversed(RdBu[11])), low=-1.0, high=1.0, nan_color="lightgray")
+        import common_plot
+        cmap = LinearColorMapper(palette=common_plot.get_divergent_palette(256), low=-1.0, high=1.0, nan_color="lightgray")
         
         # Determine ranges
         min_var = 1
@@ -511,7 +513,7 @@ class NMFMetaDashboardController:
         if self.svg_export.value:
             p.output_backend = "svg"
             
-        pane = pn.pane.Bokeh(p, sizing_mode="fixed", width=850, height=600)
+        pane = TitledPlotPane(p, title="Basis Regression Matrix", sizing_mode="fixed", width=850, height=600)
         self.basis_reg_container.clear()
         self.basis_reg_container.append(pane)
 
@@ -598,6 +600,9 @@ class NMFMetaDashboardController:
                 svg_export_mode=self.svg_export.value,
             )
             self.dashboard_pane.append(dash)
+            from common_plot import apply_export_prefix_to_pane, TitledPlotPane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.dashboard_pane, prefix)
             self.status.object = "Analysis complete."
         except Exception as e:
             self.status.object = f"**Analysis failed:** {e}"

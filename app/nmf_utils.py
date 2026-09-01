@@ -15,6 +15,8 @@ OK = "OK:"; WARN = "Warning:"
 def ok(m): return f"{OK} {m}"
 def warn(m): return f"{WARN} {m}"
 
+from common_plot import TitledPlotPane
+
 pn.extension('tabulator')
 
 
@@ -80,14 +82,15 @@ class NMFController:
         self.roi_lo = pn.widgets.FloatInput(name="ROI start (t)", value=0.0, step=0.01, width=120)
         self.roi_hi = pn.widgets.FloatInput(name="ROI end (t)", value=1.0, step=0.01, width=120)
         self.sample_select = pn.widgets.Select(name="Sample for preview", options=[], value=None, width=260)
+        self.asinh_toggle = pn.widgets.Toggle(name="Plot asinh", value=False, button_type="primary", width=120)
         self.exclude_group = pn.widgets.CheckBoxGroup(name="Samples to Exclude", options=[], value=[], inline=True)
         self.preview_btn = pn.widgets.Button(name="Preview reconstruction", button_type="success", disabled=True)
         self.calc_btn = pn.widgets.Button(name="Calculate NMF Loadings", button_type="success", disabled=True)
         self.status = pn.pane.Markdown("", sizing_mode="stretch_width")
 
         # ---------- Plots ----------
-        self.recon_pane = pn.pane.Bokeh(height=420, sizing_mode="stretch_width")
-        self.heatmap_pane = pn.pane.Bokeh(height=520, sizing_mode="stretch_width")
+        self.recon_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.heatmap_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # ---------- Export ----------
         self.csv_name = pn.widgets.TextInput(name="Loadings CSV filename", value="nmf_loadings.csv", width=260)
@@ -123,7 +126,7 @@ class NMFController:
             *csv_block,
             pn.pane.Markdown("### Sample Management"),
             pn.Column(pn.pane.Markdown("Check samples to **exclude** from NMF:"), self.exclude_group, sizing_mode="stretch_width", styles={'background': '#f9f9f9', 'padding': '10px', 'border-radius': '5px'}),
-            pn.Row(self.k_slider, pn.Spacer(width=12), self.l2_input, pn.Spacer(width=12), self.roi_lo, pn.Spacer(width=12), self.roi_hi, pn.Spacer(width=12), self.sample_select),
+            pn.Row(self.k_slider, pn.Spacer(width=12), self.l2_input, pn.Spacer(width=12), self.roi_lo, pn.Spacer(width=12), self.roi_hi, pn.Spacer(width=12), self.sample_select, pn.Spacer(width=12), self.asinh_toggle),
             pn.Row(self.preview_btn, pn.Spacer(width=12), self.calc_btn),
             self.recon_pane,
             pn.layout.Divider(),
@@ -249,11 +252,15 @@ class NMFController:
                 str(self.sample_select.value), H_df, Phi,
                 pseudotimes_df=P_sub, norm_df=Y_sub,
                 rows_are_traces=self.rows_are_traces, title_prefix="Sample",
-                mask_range=(self.roi_lo.value, self.roi_hi.value)
+                mask_range=(self.roi_lo.value, self.roi_hi.value),
+                use_asinh=self.asinh_toggle.value
             )
             try: fig.toolbar.active_scroll = None
             except Exception: pass
             self.recon_pane.object = fig
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.recon_pane, prefix)
             self.status.object = ok("Preview updated.")
         except Exception as e:
             self.recon_pane.object = None
@@ -286,13 +293,18 @@ class NMFController:
             )
             self.H_df, self.Phi, self.centers, self.pseudo_used_df = H_df, Phi, centers, pseudo_used_df
 
+            from common_plot import get_continuous_palette
+            cmap = get_continuous_palette(256)
             try:
-                _, _, _, fig = cet.plot_loadings_heatmap_clustered_bokeh(H_df, centers=centers, title="NMF loadings (clustered rows)")
+                _, _, _, fig = cet.plot_loadings_heatmap_clustered_bokeh(H_df, centers=centers, title="NMF loadings (clustered rows)", cmap=cmap)
             except Exception:
-                fig, _ = cet.plot_loadings_heatmap_bokeh(H_df, centers=centers)
+                fig, _ = cet.plot_loadings_heatmap_bokeh(H_df, cmap=cmap)
             try: fig.toolbar.active_scroll = None
             except Exception: pass
             self.heatmap_pane.object = fig
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.heatmap_pane, prefix)
 
             self.csv_download.disabled = False
             self.status.object = ok("NMF loadings calculated.")

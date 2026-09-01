@@ -111,9 +111,21 @@ class MiscController:
         # Regression Matrix
         self.reg_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.reg_btn.on_click(self._update_reg)
-        self.reg_vars = pn.widgets.MultiChoice(name="Variables to correlate", options=[], width=500)
+        self.reg_vars = pn.widgets.MultiChoice(name="Continuous variables to correlate", options=[], width=500)
         self.reg_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=850, height=600)
         self.reg_status = pn.pane.Markdown("")
+
+        # Categorical Covariance Matrix
+        self.cat_cov_btn = pn.widgets.Button(name="Visualize", button_type="success")
+        self.cat_cov_btn.on_click(self._update_cat_cov)
+        self.cat_cov_vars = pn.widgets.MultiChoice(name="Categorical variables to correlate", options=[], width=500)
+        self.cat_cov_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=850, height=600)
+        self.cat_cov_status = pn.pane.Markdown("")
+        
+        self.reg_show_overlay = pn.widgets.Checkbox(name="Show text overlay", value=True)
+        self.cat_cov_show_overlay = pn.widgets.Checkbox(name="Show text overlay", value=True)
+        self.reg_show_overlay.param.watch(self._update_reg, "value")
+        self.cat_cov_show_overlay.param.watch(self._update_cat_cov, "value")
         
         self.section = pn.Column(
             pn.pane.Markdown("## Miscellaneous Visualizations\nUpload standalone files, or let the session automatically bridge generated data here."),
@@ -144,10 +156,15 @@ class MiscController:
             pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn),
             self.cat_plot_pane,
             pn.layout.Divider(),
-            pn.pane.Markdown("### Regression Matrix"),
-            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_btn),
+            pn.pane.Markdown("### Regression Matrix (Continuous)"),
+            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_show_overlay, self.reg_btn),
             self.reg_status,
             self.reg_plot_pane,
+            pn.layout.Divider(),
+            pn.pane.Markdown("### Covariance Matrix (Categorical)"),
+            pn.Row(self.cat_cov_vars, pn.Spacer(width=12), self.cat_cov_show_overlay, self.cat_cov_btn),
+            self.cat_cov_status,
+            self.cat_cov_plot_pane,
             sizing_mode="stretch_width"
         )
 
@@ -307,6 +324,9 @@ class MiscController:
         self.reg_vars.options = num_cols
         self.reg_vars.value = [c for c in num_cols if "basis" not in str(c).lower()]
         
+        self.cat_cov_vars.options = cols
+        self.cat_cov_vars.value = [c for c in cols if c not in num_cols]
+        
         if num_cols:
             self.cvc_x.value = num_cols[0]
             self.cvc_y.value = num_cols[min(1, len(num_cols)-1)]
@@ -437,6 +457,9 @@ class MiscController:
             p_fig.add_layout(reg_legend, "below")
 
         self.cvc_plot_pane.object = p_fig
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.cvc_plot_pane, prefix)
 
     def _update_cat(self, *_):
         self.cat_plot_pane.object = None
@@ -532,6 +555,9 @@ class MiscController:
             current_y += step
             
         self.cat_plot_pane.object = p_fig
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.cat_plot_pane, prefix)
 
     def _update_reg(self, *_):
         from bokeh.models import LinearColorMapper, HoverTool, ColorBar
@@ -564,6 +590,13 @@ class MiscController:
                         data.append({'var1': v1, 'var2': v2, 'r': np.nan, 'p': np.nan})
                         
         plot_df = pd.DataFrame(data)
+        def format_text(row):
+            if pd.isna(row['r']): return ""
+            p = row['p']
+            if pd.isna(p): return f"r={row['r']:.2f}\np=NaN"
+            p_str = "<0.001" if p < 0.001 else f"{p:.3f}"
+            return f"r={row['r']:.2f}\np={p_str}"
+        plot_df['text'] = plot_df.apply(format_text, axis=1)
         
         from bokeh.palettes import RdBu
         cmap = LinearColorMapper(palette=list(reversed(RdBu[11])), low=-1.0, high=1.0, nan_color="lightgray")
@@ -577,6 +610,11 @@ class MiscController:
         
         p.rect(x="var2", y="var1", width=1, height=1, source=plot_df,
                line_color="white", fill_color={"field": "r", "transform": cmap})
+               
+        if self.reg_show_overlay.value:
+            p.text(x="var2", y="var1", text="text", text_color="gray", 
+                   text_align="center", text_baseline="middle", 
+                   text_font_size="10pt", source=plot_df)
                
         hover = p.select_one(HoverTool)
         hover.tooltips = [
@@ -592,8 +630,106 @@ class MiscController:
             p.output_backend = "svg"
             
         self.reg_plot_pane.object = p
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.reg_plot_pane, prefix)
         self.reg_status.object = ""
 
+
+    def _update_cat_cov(self, *_):
+        from bokeh.models import LinearColorMapper, HoverTool, ColorBar
+        from bokeh.plotting import figure
+        import scipy.stats as ss
+        import math
+        
+        def cramers_v_and_p(x, y):
+            confusion_matrix = pd.crosstab(x, y)
+            chi2, p_value, _, _ = ss.chi2_contingency(confusion_matrix)
+            n = confusion_matrix.sum().sum()
+            phi2 = chi2 / n
+            r, k = confusion_matrix.shape
+            if n == 0 or min(r, k) == 1:
+                return np.nan, np.nan
+            phi2corr = max(0, phi2 - ((k-1)*(r-1))/(n-1))
+            rcorr = r - ((r-1)**2)/(n-1)
+            kcorr = k - ((k-1)**2)/(n-1)
+            denom = min((kcorr-1), (rcorr-1))
+            if denom == 0: return np.nan, np.nan
+            v = np.sqrt(phi2corr / denom)
+            return v, p_value
+
+        df_source = self._get_df()
+        if df_source is None or df_source.empty:
+            self.cat_cov_status.object = "**Error: No data available.**"
+            return
+            
+        vars = self.cat_cov_vars.value
+        if not vars or len(vars) < 2:
+            self.cat_cov_status.object = "**Error: Please select at least two variables.**"
+            return
+            
+        data = []
+        for i, v1 in enumerate(vars):
+            for j, v2 in enumerate(vars):
+                if i > j:
+                    df_pair = df_source[[v1, v2]].dropna()
+                    if len(df_pair) < 3:
+                        data.append({'var1': v1, 'var2': v2, 'v': np.nan, 'p': np.nan})
+                        continue
+                    try:
+                        v_val, p_val = cramers_v_and_p(df_pair[v1], df_pair[v2])
+                        data.append({'var1': v1, 'var2': v2, 'v': v_val, 'p': p_val})
+                    except Exception:
+                        data.append({'var1': v1, 'var2': v2, 'v': np.nan, 'p': np.nan})
+                        
+        plot_df = pd.DataFrame(data)
+        def format_text(row):
+            if pd.isna(row['v']):
+                return ""
+            p = row['p']
+            if pd.isna(p): return f"V={row['v']:.2f}\np=NaN"
+            p_str = "<0.001" if p < 0.001 else f"{p:.3f}"
+            return f"V={row['v']:.2f}\np={p_str}"
+        plot_df['text'] = plot_df.apply(format_text, axis=1)
+        
+        from bokeh.palettes import Blues
+        cmap = LinearColorMapper(palette=list(reversed(Blues[9])), low=0.0, high=1.0, nan_color="lightgray")
+        
+        p = figure(title="Categorical Covariance Matrix (Cramér's V)",
+                   x_range=vars[:-1], y_range=list(reversed(vars[1:])),
+                   x_axis_location="above", width=850, height=600,
+                   tools="hover,save,pan,wheel_zoom,box_zoom,reset", toolbar_location="right")
+                   
+        p.xaxis.major_label_orientation = math.pi / 4
+        
+        p.rect(x="var2", y="var1", width=1, height=1, source=plot_df,
+               line_color="white", fill_color={"field": "v", "transform": cmap})
+               
+        if self.cat_cov_show_overlay.value:
+            p.text(x="var2", y="var1", text="text", text_color="gray", 
+                   text_align="center", text_baseline="middle", 
+                   text_font_size="10pt", source=plot_df)
+               
+        hover = p.select_one(HoverTool)
+        hover.tooltips = [
+            ("Pair", "@var1 vs @var2"),
+            ("Cramér's V", "@v{0.000}"),
+            ("p-value", "@p{0.00e-0}")
+        ]
+        
+        color_bar = ColorBar(color_mapper=cmap, width=8, location=(0,0))
+        p.add_layout(color_bar, 'right')
+        
+        if self.svg_export.value:
+            p.output_backend = "svg"
+            
+        self.cat_cov_plot_pane.object = p
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.cat_cov_plot_pane, prefix)
+        self.cat_cov_status.object = ""
+
 def build_misc_section():
+
     ctrl = MiscController()
     return ctrl.section, ctrl

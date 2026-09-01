@@ -2,8 +2,11 @@
 # FILE: app.py
 # ============================
 from __future__ import annotations
+import sys
 import io, zipfile, uuid
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
@@ -13,7 +16,7 @@ import bokeh.plotting
 
 # Local utils
 from upload_utils import sanitize_name, convert_cdf_bytes_to_df, try_merge_same_time, load_csv_bytes_to_dfs
-from common_plot import make_preview_plot
+from common_plot import make_preview_plot, apply_export_prefix_to_pane, TitledPlotPane
 
 # Preprocess controllers/sections
 from preprocess_despike_utils import build_despike_section
@@ -58,6 +61,8 @@ class SessionState:
         # Aligned data
         self.aligned_pseudotimes_df: Optional[pd.DataFrame] = None
         self.aligned_norm_df: Optional[pd.DataFrame] = None
+        
+        self.metadata_df: Optional[pd.DataFrame] = None
         self.rows_are_traces_aligned: bool = False
         # NMF loadings
         self.H_df: Optional[pd.DataFrame] = None
@@ -132,19 +137,21 @@ upload_status = pn.pane.Markdown("Upload one or more `.cdf` or `.csv` files.", s
 convert_btn = pn.widgets.Button(name="Process Files", button_type="primary", disabled=True)
 
 rename_status = pn.pane.Markdown("", sizing_mode="stretch_width")
-rename_box = pn.Column(sizing_mode="stretch_both")
+rename_box = pn.Column(sizing_mode="stretch_width")
 
 def _unique_names(names: List[str]) -> Tuple[bool, str]:
     lower = [n.lower() for n in names]
     return (True, "OK") if len(set(lower)) == len(lower) else (False, "Duplicate names detected.")
 
 def _build_rename_panel():
-    rename_box.objects = []
     if not state.uploads:
         rename_status.object = ""
+        rename_box.clear()
         return
     if not state.sample_names:
         state.sample_names = {orig: sanitize_name(orig) for orig, _ in state.uploads}
+        
+    rows = []
     for orig, _ in state.uploads:
         left = pn.pane.Markdown(f"**Original**: `{Path(orig).name}`", width=380)
         edit = pn.widgets.TextInput(name="", value=state.sample_names[orig], width=260)
@@ -157,27 +164,33 @@ def _build_rename_panel():
             rename_status.object = ok("Names are valid.") if ok_flag else warn(msg)
             convert_btn.disabled = not ok_flag
         edit.param.watch(_on_change, "value")
-        rename_box.append(pn.Row(left, edit))
+        rows.append(pn.Row(left, edit))
+        
+    rename_box.objects = rows
+    
     names = [state.sample_names[o] for o, _ in state.uploads]
     ok_flag, msg = _unique_names(names)
     rename_status.object = ok("Names are valid.") if ok_flag else warn(msg)
     convert_btn.disabled = not ok_flag
 
-zip_name = pn.widgets.TextInput(name="ZIP filename (per-sample CSVs)", value="converted_csvs.zip")
+zip_name = pn.widgets.TextInput(name="ZIP filename (per-sample CSVs)", value="CE_analysis_converted_csvs.zip")
 zip_download = pn.widgets.FileDownload(label="Download ZIP", filename=zip_name.value, button_type="primary", embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True)
+zip_download._manually_prefixed = True
 zip_name.param.watch(lambda e: setattr(zip_download, "filename", e.new or "converted_csvs.zip"), "value")
 
 merge_status = pn.pane.Markdown("", sizing_mode="stretch_width")
-merge_name = pn.widgets.TextInput(name="Merged CSV filename", value="merged.csv")
+merge_name = pn.widgets.TextInput(name="Merged CSV filename", value="CE_analysis_merged.csv")
 merge_download = pn.widgets.FileDownload(label="Download Merged CSV", filename=merge_name.value, button_type="primary", embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True)
+merge_download._manually_prefixed = True
 merge_name.param.watch(lambda e: setattr(merge_download, "filename", e.new or "merged.csv"), "value")
 
-plot_pane = pn.pane.Bokeh(sizing_mode="stretch_width")
+plot_pane = TitledPlotPane(sizing_mode="stretch_width")
 offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
 upload_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
+sort_by_order_btn = pn.widgets.Checkbox(name="Sort by Order of Run", value=False)
 
 downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(zip_name, zip_download), pn.Row(merge_name, merge_download), merge_status, visible=False, sizing_mode="stretch_width")
-preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle, upload_svg_export), plot_pane, visible=False, sizing_mode="stretch_width")
+preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle, upload_svg_export, sort_by_order_btn), plot_pane, visible=False, sizing_mode="stretch_width")
 
 import importlib.metadata
 try:
@@ -257,15 +270,34 @@ def _render_plot(*_):
         plot_pane.object = None
         state.last_fig = None
         return
-    fig = make_preview_plot(state.converted_by_sample, minutes=prefer_minutes.value, offset=offset_slider.value, asinh=asinh_toggle.value, title="Chromatograph(s) preview")
+        
+    samples = state.converted_by_sample
+    if sort_by_order_btn.value and state.metadata_df is not None and 'Order of Run' in state.metadata_df.columns:
+        # Sort based on Order of Run
+        try:
+            order_map = state.metadata_df.set_index('Original Name')['Order of Run'].dropna().to_dict()
+            # The keys in state.converted_by_sample might be renamed, wait
+            # state.metadata_df has '_sample_id' which matches keys if they weren't renamed?
+            # Actually, `Original Name` in metadata_df matches `state.sample_names.items()` value.
+            # When we convert, we store in state.converted_by_sample using `final_name = state.sample_names.get(orig, s_name)`.
+            # So `final_name` is exactly what `Original Name` stores in metadata_df!
+            # Let's use Original Name to map to Order of Run
+            sorted_keys = sorted(samples.keys(), key=lambda k: order_map.get(k, 999999))
+            samples = {k: samples[k] for k in sorted_keys}
+        except Exception:
+            pass
+            
+    fig = make_preview_plot(samples, minutes=prefer_minutes.value, offset=offset_slider.value, asinh=asinh_toggle.value, title="Chromatograph(s) preview")
     fig.output_backend = "svg" if upload_svg_export.value else "canvas"
     plot_pane.object = fig
+    apply_export_prefix_to_pane(plot_pane, global_export_prefix.value, "")
     state.last_fig = fig
 
 offset_slider.param.watch(_render_plot, "value")
 prefer_minutes.param.watch(_render_plot, "value")
 asinh_toggle.param.watch(_render_plot, "value")
 upload_svg_export.param.watch(_render_plot, "value")
+sort_by_order_btn.param.watch(_render_plot, "value")
 
 def _on_convert_click(event):
     if not state.uploads:
@@ -340,6 +372,129 @@ def _on_convert_click(event):
         pass
 convert_btn.on_click(_on_convert_click)
 
+# ===================== Metadata Extractor =====================
+meta_pattern_input = pn.widgets.TextInput(name="Extraction Pattern", value="[*]-[M]-[DD]-[YYYY]_[HR]-[MIN]-[SEC]_[AM]dat-LIF_[*].cdf", sizing_mode="stretch_width")
+meta_extract_btn = pn.widgets.Button(name="Extract Metadata", button_type="primary", width=150)
+meta_status = pn.pane.Markdown("", sizing_mode="stretch_width")
+meta_table = pn.widgets.Tabulator(pd.DataFrame(), height=200, show_index=False, sizing_mode="stretch_width")
+meta_csv_name = pn.widgets.TextInput(name="Metadata CSV", value="metadata.csv", width=200)
+meta_csv_btn = pn.widgets.FileDownload(
+    label="Download Metadata", filename=meta_csv_name.value, button_type="success",
+    embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True
+)
+meta_csv_name.param.watch(lambda e: setattr(meta_csv_btn, "filename", e.new or "metadata.csv"), "value")
+
+import re
+from datetime import datetime
+
+def _on_meta_extract_click(event):
+    if not state.sample_names:
+        meta_status.object = warn("No samples uploaded.")
+        return
+        
+    pattern = meta_pattern_input.value
+    if not pattern:
+        meta_status.object = warn("Please enter a pattern.")
+        return
+        
+    # Strip extension from pattern since sample names are sanitized without it
+    pattern = re.sub(r'(?i)\.cdf$', '', pattern)
+    pattern = re.sub(r'(?i)\.csv$', '', pattern)
+        
+    regex_parts = []
+    variables = []
+    
+    parts = re.split(r'(\[[^\]]+\])', pattern)
+    for p in parts:
+        if p.startswith('[') and p.endswith(']'):
+            var_name = p[1:-1]
+            if var_name == '*':
+                regex_parts.append('.*?')
+            else:
+                regex_parts.append(f"(?P<{var_name}>.*?)")
+                variables.append(var_name)
+        else:
+            regex_parts.append(re.escape(p))
+            
+    regex_str = "".join(regex_parts)
+    
+    try:
+        compiled_re = re.compile(regex_str, re.IGNORECASE)
+    except Exception as e:
+        meta_status.object = warn(f"Invalid pattern regex: {str(e)}")
+        return
+        
+    extracted = []
+    for s_id, s_name in state.sample_names.items():
+        match = compiled_re.search(s_name)
+        if match:
+            d = match.groupdict()
+            d['_sample_id'] = s_id
+            d['Original Name'] = s_name
+            extracted.append(d)
+        else:
+            extracted.append({'_sample_id': s_id, 'Original Name': s_name})
+            
+    df = pd.DataFrame(extracted)
+    
+    # Try to parse Date/Time
+    has_year = 'YYYY' in df.columns or 'YY' in df.columns
+    has_month = 'MM' in df.columns or 'M' in df.columns
+    has_day = 'DD' in df.columns or 'D' in df.columns
+    
+    if len(df) > 0 and has_year and has_month and has_day:
+        parsed_dates = []
+        for i, row in df.iterrows():
+            try:
+                y = row.get('YYYY') or row.get('YY') or '2000'
+                m = row.get('M') or row.get('MM') or '1'
+                d = row.get('DD') or row.get('D') or '1'
+                date_str = f"{y}-{m}-{d}"
+                
+                time_str = "00:00:00"
+                
+                h = row.get('HR') or row.get('HH') or row.get('HH24')
+                min_val = row.get('MIN') or row.get('MM_min')
+                if not min_val and 'M' in df.columns and 'MM' in df.columns:
+                    min_val = row.get('MM')
+                min_val = min_val or '00'
+                s = row.get('SEC') or row.get('SS') or '00'
+                
+                if h is not None:
+                    time_str = f"{h}:{min_val}:{s}"
+                    pm = row.get('AM') or row.get('PM')
+                    if pm:
+                        dt = datetime.strptime(f"{date_str} {time_str} {pm}", "%Y-%m-%d %I:%M:%S %p")
+                    else:
+                        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+                else:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                parsed_dates.append(dt)
+            except Exception:
+                parsed_dates.append(None)
+        
+        df['Parsed Datetime'] = parsed_dates
+        # Compute order of run
+        df['Order of Run'] = df['Parsed Datetime'].rank(method='min').astype('Int64')
+        
+    state.metadata_df = df
+    meta_table.value = df.drop(columns=['_sample_id']) if '_sample_id' in df.columns else df
+    
+    def _csv_bytes():
+        bio = io.BytesIO()
+        df.to_csv(bio, index=False)
+        bio.seek(0)
+        return bio
+        
+    meta_csv_btn.callback = _csv_bytes
+    meta_csv_btn.disabled = False
+    meta_status.object = ok(f"Extracted metadata for {len(df)} samples.")
+    
+    # Trigger preview update
+    _render_plot()
+
+meta_extract_btn.on_click(_on_meta_extract_click)
+
 left_col = pn.Column(
     pn.pane.Markdown("## 1) Upload & Process (.cdf or .csv)"),
     pn.Row(upload, pn.Spacer(width=12), prefer_minutes),
@@ -349,18 +504,29 @@ left_col = pn.Column(
     pn.layout.Divider(),
     downloads_group,
 )
-right_col = pn.Column(
+mid_col = pn.Column(
     pn.pane.Markdown("### Sample Renamer"),
     pn.pane.Markdown("Edit each sample name (must be unique)."),
     rename_status,
     pn.layout.Divider(),
     rename_box,
     sizing_mode="stretch_both",
-    width=520,
+    width=380,
+)
+right_col = pn.Column(
+    pn.pane.Markdown("### Metadata Extractor"),
+    pn.pane.Markdown("Extract variables from filenames using brackets. E.g. `[sample]_[*]-[YYYY]-[MM]-[DD].cdf`"),
+    meta_pattern_input,
+    meta_extract_btn,
+    meta_status,
+    meta_table,
+    pn.Row(meta_csv_name, meta_csv_btn),
+    sizing_mode="stretch_both",
+    width=420,
 )
 upload_tab = pn.Column(
     preview_group,
-    pn.Row(left_col, pn.layout.HSpacer(width=16), right_col, sizing_mode="stretch_width"),
+    pn.Row(left_col, pn.layout.HSpacer(width=16), mid_col, pn.layout.HSpacer(width=16), right_col, sizing_mode="stretch_width"),
     sizing_mode="stretch_width"
 )
 
@@ -788,8 +954,49 @@ def _on_tab_change(event):
 
 TABS.param.watch(_on_tab_change, "active")
 
+global_export_prefix = pn.widgets.TextInput(name="Global Export Prefix", value="CE_analysis", width=250)
+
+def _update_export_prefixes(event):
+    p = getattr(event, "new", event)
+    old_p = getattr(event, "old", "") if hasattr(event, "old") else ""
+    for w in [zip_name, merge_name, meta_csv_name]:
+        val = w.value
+        if old_p and val.startswith(f"{old_p}_"):
+            w.value = f"{p}_{val[len(old_p)+1:]}"
+        elif not val.startswith(f"{p}_"):
+            w.value = f"{p}_{val}"
+
+    for ctrl in [viz_ctrl, diversity_ctrl, misc_ctrl, timeseries_ctrl, nmf_ctrl, nmf_meta_ctrl]:
+        if hasattr(ctrl, "export_prefix"):
+            ctrl.export_prefix = p
+        else:
+            setattr(ctrl, "export_prefix", p)
+    apply_export_prefix_to_pane(TABS, p, old_p)
+
+global_export_prefix.param.watch(_update_export_prefixes, "value")
+_update_export_prefixes(global_export_prefix.value)
+
+import common_plot
+
+global_colormap = pn.widgets.Select(name="Colormap", options=common_plot.get_available_palettes(), value="glasbey", width=200)
+
+def _update_colormap(event):
+    common_plot.CURRENT_PALETTE_NAME = event.new
+    # Trigger a replot of the preview if it exists
+    if len(state.current_by_sample) > 0:
+        _render_plot()
+
+global_colormap.param.watch(_update_colormap, "value")
+
 HEADER = pn.pane.Markdown(f"# CEtools — Electropherogram Pipeline ({APP_VERSION})", sizing_mode="stretch_width")
-app = pn.Column(HEADER, bridge_status, TABS, sizing_mode="stretch_width")
+HEADER_ROW = pn.Row(HEADER, pn.Spacer(sizing_mode='stretch_width'), global_colormap, global_export_prefix, sizing_mode="stretch_width")
+
+COLORMAP_INFO = pn.pane.Markdown("""
+***Colormap Types**: **Continuous** creates a smooth gradient (great for many samples or time-series). **Categorical** uses distinct, high-contrast colors (great for discrete groups). **Divergent** transitions between two contrasting colors. 
+Colormaps provided by [Crameri (Scientific Colour Maps)](https://www.fabiocrameri.ch/colourmaps/) and [Colorcet (Glasbey)](https://colorcet.holoviz.org/)*
+""", sizing_mode="stretch_width", margin=(0, 15, 10, 15))
+
+app = pn.Column(HEADER_ROW, COLORMAP_INFO, bridge_status, TABS, sizing_mode="stretch_width")
 app.servable(title="CEtools Pipeline")
 
 if __name__ == "__main__":

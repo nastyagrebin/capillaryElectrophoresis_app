@@ -7,7 +7,7 @@ import io, zipfile
 import numpy as np
 import pandas as pd
 import panel as pn
-from common_plot import plot_multi
+from common_plot import apply_export_prefix_to_pane, plot_multi, TitledPlotPane
 from scipy.signal import savgol_filter
 
 OK = "OK:"
@@ -30,8 +30,8 @@ class SmoothController:
         self.skip_btn    = pn.widgets.Button(name="Skip smoothing (use input data)", button_type="danger", disabled=True)
 
 
-        self.before_pane = pn.pane.Bokeh(sizing_mode="stretch_width")
-        self.after_pane  = pn.pane.Bokeh(sizing_mode="stretch_width")
+        self.before_pane = TitledPlotPane(sizing_mode="stretch_width")
+        self.after_pane  = TitledPlotPane(sizing_mode="stretch_width")
 
         self.export_name = pn.widgets.TextInput(name="Smoothed filename", value="smoothed_merged.csv", width=300)
         self.export_btn  = pn.widgets.FileDownload(label="Export smoothed", filename=self.export_name.value,

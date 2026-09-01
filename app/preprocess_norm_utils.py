@@ -11,7 +11,7 @@ from bokeh.models import ColumnDataSource, BoxAnnotation, CustomJS
 from bokeh.events import SelectionGeometry
 from bokeh.palettes import Category10, Turbo256
 
-from common_plot import plot_multi
+from common_plot import plot_multi, apply_export_prefix_to_pane, TitledPlotPane
 
 pn.extension("bokeh")  # safe if already called; Panel guards it
 
@@ -25,10 +25,8 @@ def warn(msg: str) -> str:
     return f"{WARN} {msg}"
 
 def _palette(n: int):
-    if n <= 10:
-        return list(Category10[10])[:n]
-    idxs = np.linspace(0, 255, num=n, dtype=int)
-    return [Turbo256[i] for i in idxs]
+    import common_plot
+    return common_plot._palette(n)
 
 @dataclass
 class NormalizationController:
@@ -46,8 +44,8 @@ class NormalizationController:
     normalized_by_sample: Dict[str, pd.DataFrame] = field(default_factory=dict)
 
     # UI elements
-    before_pane: pn.pane.Bokeh = field(default_factory=lambda: pn.pane.Bokeh(sizing_mode="stretch_width"))
-    after_pane: pn.pane.Bokeh = field(default_factory=lambda: pn.pane.Bokeh(sizing_mode="stretch_width"))
+    before_pane: TitledPlotPane = field(default_factory=lambda: TitledPlotPane(sizing_mode="stretch_width"))
+    after_pane: TitledPlotPane = field(default_factory=lambda: TitledPlotPane(sizing_mode="stretch_width"))
     status: pn.pane.Markdown = field(default_factory=lambda: pn.pane.Markdown("", sizing_mode="stretch_width"))
 
     apply_btn: pn.widgets.Button = field(default_factory=lambda: pn.widgets.Button(name="Normalize by Area", button_type="success", disabled=True))
@@ -118,6 +116,9 @@ class NormalizationController:
         try:
             fig_after = plot_multi(self.normalized_by_sample, title=t, xlab="time", ylab="intensity (normalized)", offset=self.post_offset.value, asinh=self.post_asinh.value, line_width=2)
             self.after_pane.object = fig_after
+            from common_plot import apply_export_prefix_to_pane
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            apply_export_prefix_to_pane(self.after_pane, prefix)
         except Exception:
             pass
 
@@ -144,7 +145,6 @@ class NormalizationController:
             tools="pan,wheel_zoom,box_zoom,box_select,reset,save,hover",
             active_drag="box_select",
         )
-        fig.legend.click_policy = "hide"
         fig.xgrid.grid_line_color = None
         fig.ygrid.grid_line_color = None
 
@@ -179,8 +179,6 @@ class NormalizationController:
                 selection_fill_alpha=0.0, selection_line_alpha=0.0,
                 hover_fill_alpha=0.0, hover_line_alpha=0.0,
             )
-
-            # Red patch for AUC
             auc_src = ColumnDataSource(dict(px=[], py=[]))
             fig.patch("px","py", source=auc_src, fill_color="red", fill_alpha=0.35, line_color=None)
             self._auc_patch_by_sample[name] = auc_src
@@ -249,7 +247,13 @@ class NormalizationController:
             """)
             fig.js_on_event(SelectionGeometry, cb)
 
+        if fig.legend:
+            fig.legend.click_policy = "hide"
+            
         self.before_pane.object = fig
+        from common_plot import plot_multi, apply_export_prefix_to_pane, TitledPlotPane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.before_pane, prefix)
         # Enable buttons with data present
         self.apply_btn.disabled = False
         self.apply_height_btn.disabled = False
@@ -294,14 +298,19 @@ class NormalizationController:
             if method == "height":
                 norm_val = float(y[best])
             else:
-                # Grow L/R while non-increasing; clamp to selection
-                eps = 1e-9
-                L = best
-                while L > 0 and y[L-1] <= y[L] + eps: L -= 1
-                R = best
-                n_1 = y.size - 1
-                while R < n_1 and y[R+1] <= y[R] + eps: R += 1
+                from scipy.signal import find_peaks, peak_prominences
+                peaks, _ = find_peaks(y)
+                peaks_in_window = peaks[(peaks >= idx[0]) & (peaks <= idx[-1])]
 
+                if len(peaks_in_window) == 0:
+                    L, R = idx[0], idx[-1]
+                else:
+                    peak_idx = peaks_in_window[np.argmax(y[peaks_in_window])]
+                    _, left_bases, right_bases = peak_prominences(y, [peak_idx])
+                    L = left_bases[0]
+                    R = right_bases[0]
+
+                # Ensure L and R are within the user's selected bounding box
                 while L < best and x[L] < xmin: L += 1
                 while R > best and x[R] > xmax: R -= 1
 

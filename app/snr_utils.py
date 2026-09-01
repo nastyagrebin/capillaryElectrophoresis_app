@@ -23,11 +23,11 @@ OK = "OK:"; WARN = "Warning:"
 def ok(m):   return f"{OK} {m}"
 def warn(m): return f"{WARN} {m}"
 
+from common_plot import TitledPlotPane
+
 def _palette(n: int) -> List[str]:
-    if n <= 10:
-        return list(Category10[10])[:n]
-    idxs = np.linspace(0, 255, num=n, dtype=int)
-    return [Turbo256[i] for i in idxs]
+    import common_plot
+    return common_plot._palette(n)
 
 
 class SNRController:
@@ -63,7 +63,7 @@ class SNRController:
         )
 
         # ---------- Plot ----------
-        self.plot_pane = pn.pane.Bokeh(sizing_mode="stretch_width")
+        self.plot_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # ---------- Region Buttons ----------
         self.set_signal_btn = pn.widgets.Button(
@@ -94,14 +94,12 @@ class SNRController:
         self.csv_name = pn.widgets.TextInput(name="CSV filename", value="snr_results.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
             label="Download SNR CSV", filename="snr_results.csv",
-            button_type="primary", embed=False, auto=False,
-            callback=lambda: io.BytesIO(b""),
-            disabled=True,
+            button_type="primary", embed=True, auto=False,
+            file=io.BytesIO(b""), disabled=True,
         )
         self.csv_name.param.watch(
             lambda e: setattr(self.csv_download, "filename", e.new or "snr_results.csv"), "value"
         )
-        self.csv_download.callback = self._csv_bytes
 
         # ---------- Wire ----------
         self.offset_slider.param.watch(lambda _: self._rebuild_figure(), "value")
@@ -179,7 +177,17 @@ class SNRController:
         self.results_table.value  = pd.DataFrame()
         self.status.object = ""
 
-        self.exclude_group.options = self._samples
+        opts = {}
+        for s in self._samples:
+            label = str(s)[:10]
+            # Ensure unique labels if there are collisions
+            base_label = label
+            i = 1
+            while label in opts:
+                label = f"{base_label}_{i}"
+                i += 1
+            opts[label] = s
+        self.exclude_group.options = opts
         self.exclude_group.value   = []
 
         self._rebuild_figure()
@@ -258,6 +266,9 @@ class SNRController:
         p.xgrid.grid_line_color = None
         p.ygrid.grid_line_color = None
         self.plot_pane.object = p
+        from common_plot import apply_export_prefix_to_pane, TitledPlotPane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.plot_pane, prefix)
 
         self.set_signal_btn.disabled = False
         self.set_noise_btn.disabled  = False
@@ -358,17 +369,14 @@ class SNRController:
 
         self.results_df = pd.DataFrame(rows).set_index("Sample")
         self.results_table.value = self.results_df.reset_index()
+        
+        bio = io.BytesIO()
+        self.results_df.to_csv(bio)
+        bio.seek(0)
+        self.csv_download.file = bio
+        
         self.csv_download.disabled = False
         self.status.object = ok(f"SNR calculated for {len(rows)} sample(s).")
 
     # ------------------------------------------------------------------
-    # Export
-    # ------------------------------------------------------------------
 
-    def _csv_bytes(self):
-        if self.results_df is None or self.results_df.empty:
-            return io.BytesIO(b"")
-        bio = io.BytesIO()
-        self.results_df.to_csv(bio)
-        bio.seek(0)
-        return bio
