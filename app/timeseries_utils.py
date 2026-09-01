@@ -667,7 +667,7 @@ class TimeSeriesController:
         N = len(states_str)
         p2 = figure(width=650, height=650, title=f"Transition Network ({state_col})",
                     x_range=(-1.8, 1.8), y_range=(-1.8, 1.8),
-                    toolbar_location=None, tools="")
+                    toolbar_location="right", tools="save")
         p2.axis.visible = False
         p2.grid.visible = False
         
@@ -691,7 +691,7 @@ class TimeSeriesController:
                 p2.circle([cx], [cy], radius=0.2, fill_color=None, line_color="black", line_width=thick)
                 tx = nodes[u][0] + 0.45 * np.cos(angle)
                 ty = nodes[u][1] + 0.45 * np.sin(angle)
-                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray")
+                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray", level="overlay")
             else:
                 xA, yA, _ = nodes[u]
                 xB, yB, _ = nodes[v]
@@ -715,7 +715,7 @@ class TimeSeriesController:
                 
                 tx = (sx + ex)/2 + nx*0.1
                 ty = (sy + ey)/2 + ny*0.1
-                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray")
+                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray", level="overlay")
                 
         if self.markov_svg_export.value:
             p2.output_backend = "svg"
