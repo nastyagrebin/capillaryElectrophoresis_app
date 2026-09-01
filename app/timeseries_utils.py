@@ -47,11 +47,19 @@ class TimeSeriesController:
         self.markov_state = pn.widgets.Select(name="State Variable", options=[], width=150)
         self.markov_cov = pn.widgets.Select(name="Covariate to Test", options=[], width=150)
         self.markov_timing = pn.widgets.Select(name="Covariate Timing", options=["Time A (Baseline)", "Time B (Outcome)", "Change (B - A)"], width=150)
+        self.markov_patient = pn.widgets.Select(name="Patient ID", options=[], width=150)
+        self.markov_time = pn.widgets.Select(name="Time Variable", options=[], width=150)
+        self.markov_time_type = pn.widgets.RadioButtonGroup(name="Time Type", options=["Continuous", "Categorical"], value="Continuous")
+        self.markov_time_order = pn.widgets.TextInput(name="Categorical Order (comma separated)", placeholder="e.g. Day1, Day2, Day3", visible=False, width=200)
+        
+        self.markov_time_type.param.watch(self._toggle_markov_time_order, 'value')
+        
+        self.markov_svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
         self.markov_btn = pn.widgets.Button(name="Run Markov Analysis", button_type="primary")
         self.markov_btn.on_click(self._on_markov_run)
         self.markov_status = pn.pane.Markdown("")
-        self.markov_plot = pn.pane.Bokeh(sizing_mode="fixed", width=500, height=400, visible=False)
-        self.markov_table = pn.pane.DataFrame(pd.DataFrame(), sizing_mode="stretch_width", visible=False)
+        self.markov_results_container = pn.Row(sizing_mode="stretch_width")
+        self.markov_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=250, sizing_mode="stretch_width", visible=False)
         
         # Slicing UI
         self.slice_col = pn.widgets.Select(name="Variable to Slice By", options=[])
@@ -103,14 +111,18 @@ class TimeSeriesController:
             self.plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### 4. Markov State Transitions"),
+            pn.Row(self.markov_patient, self.markov_time, pn.Column("Time variable type:", self.markov_time_type), self.markov_time_order),
             pn.Row(self.markov_state, self.markov_cov, self.markov_timing),
-            pn.Row(self.markov_btn, self.markov_status),
-            pn.Row(self.markov_plot, self.markov_table),
+            pn.Row(self.markov_svg_export, pn.Spacer(width=12), self.markov_btn, self.markov_status),
+            self.markov_results_container,
             sizing_mode="stretch_width"
         )
 
     def _toggle_x_order(self, event):
         self.ts_x_order.visible = (self.ts_x_type.value == "Categorical")
+        
+    def _toggle_markov_time_order(self, event):
+        self.markov_time_order.visible = (self.markov_time_type.value == "Categorical")
 
     def _get_sliced_csv(self):
         if self.sliced_df is not None:
@@ -257,6 +269,11 @@ class TimeSeriesController:
         self.ts_color.options = ["None"] + cols
         self.markov_state.options = cols
         self.markov_cov.options = ["None"] + cols
+        self.markov_time.options = cols
+        self.markov_patient.options = cols
+        if cols:
+            self.markov_time.value = cols[0]
+            self.markov_patient.value = cols[0]
         
         if cols:
             self.slice_col.value = cols[0]
@@ -485,16 +502,15 @@ class TimeSeriesController:
 
     def _on_markov_run(self, event):
         self.markov_status.object = "Running..."
-        self.markov_plot.visible = False
-        self.markov_table.visible = False
+        self.markov_results_container.clear()
         
         current_df = self._get_df()
         if current_df is None or current_df.empty:
             self.markov_status.object = "**Error:** No data available."
             return
             
-        p_col = self.ts_patient.value
-        t_col = self.ts_x.value
+        p_col = self.markov_patient.value
+        t_col = self.markov_time.value
         state_col = self.markov_state.value
         cov_col = self.markov_cov.value
         timing = self.markov_timing.value
@@ -504,25 +520,75 @@ class TimeSeriesController:
             return
             
         df = current_df.copy()
+        debug_log = [f"Initial rows: {len(df)}"]
         
         # Sort by patient and time
-        # If time is categorical, we assume it's already sorted by user order in ts_x_order, 
-        # or we just sort alphabetically. Let's use the UI order if provided.
-        if self.ts_x_type.value == "Categorical":
-            user_order = [s.strip() for s in self.ts_x_order.value.split(",") if s.strip()]
+        if self.markov_time_type.value == "Categorical":
+            user_order = [s.strip() for s in self.markov_time_order.value.split(",") if s.strip()]
             if user_order:
-                df = df[df[t_col].isin(user_order)]
-                order_map = {val: i for i, val in enumerate(user_order)}
-                df["_t_sort"] = df[t_col].astype(str).map(order_map)
+                # Robust matching between strings and floats
+                t_str = df[t_col].astype(str).str.replace(r'\.0$', '', regex=True)
+                order_clean = [s.replace('.0', '') for s in user_order]
+                df = df[t_str.isin(order_clean)]
+                debug_log.append(f"After filtering to Categorical Order: {len(df)} rows")
+                if df.empty:
+                    self.markov_status.object = "<br>".join(debug_log) + f"<br>**Error:** Time order '{self.markov_time_order.value}' did not match any values in time column '{t_col}'."
+                    return
+                order_map = {val: i for i, val in enumerate(order_clean)}
+                df["_t_sort"] = t_str.map(order_map)
                 df = df.sort_values(by=[p_col, "_t_sort"])
             else:
                 df = df.sort_values(by=[p_col, t_col])
         else:
+            orig_len = len(df)
             df[t_col] = pd.to_numeric(df[t_col], errors='coerce')
             df = df.dropna(subset=[t_col])
+            debug_log.append(f"After dropping NA in time '{t_col}': {len(df)} rows")
+            if df.empty and orig_len > 0:
+                self.markov_status.object = f"**Error:** Time variable '{t_col}' was parsed as Continuous but all values became missing. Try switching to Categorical."
+                return
             df = df.sort_values(by=[p_col, t_col])
             
+        orig_len = len(df)
         df = df.dropna(subset=[state_col])
+        debug_log.append(f"After dropping NA in state '{state_col}': {len(df)} rows")
+        if df.empty and orig_len > 0:
+            self.markov_status.object = f"**Error:** State variable '{state_col}' is completely empty."
+            return
+            
+        # Exclude patients with duplicate time points
+        patient_time_counts = df.groupby([p_col, t_col]).size()
+        patients_with_dupes = patient_time_counts[patient_time_counts > 1].index.get_level_values(0).unique()
+        if len(patients_with_dupes) > 0:
+            df = df[~df[p_col].isin(patients_with_dupes)]
+            debug_log.append(f"Excluded {len(patients_with_dupes)} patients due to duplicate time points. Remaining rows: {len(df)}")
+            if df.empty:
+                self.markov_status.object = "<br>".join(debug_log) + "<br>**Error:** All patients were excluded because they had multiple readings at the exact same time point."
+                return
+            self.markov_status.object = "<br>".join(debug_log) + "<br>"
+        else:
+            self.markov_status.object = "<br>".join(debug_log) + "<br>"
+            
+        # Exclude patients with < 2 timepoints
+        patient_counts = df[p_col].value_counts()
+        
+        # Let's add debug info about the patient counts
+        top_patients = patient_counts.head(5).to_dict()
+        msg_patients = f"<br>Patient ID column selected: '{p_col}'. <br>Top patients and their row counts: {top_patients}."
+        
+        valid_patients = patient_counts[patient_counts >= 2].index
+        df = df[df[p_col].isin(valid_patients)]
+        
+        # Remove the preview table
+        self.markov_preview.visible = False
+        
+        if df.empty:
+            msg = f"<br>**Error:** No patients left with >= 2 valid timepoints." + msg_patients
+            self.markov_status.object += msg
+            return
+            
+        self.markov_status.object += msg_patients
+            
         df['Next_State'] = df.groupby(p_col)[state_col].shift(-1)
         
         if cov_col and cov_col != "None":
@@ -532,7 +598,10 @@ class TimeSeriesController:
         trans_df = df.dropna(subset=['Next_State']).copy()
         
         if trans_df.empty:
-            self.markov_status.object = "**Error:** No valid step-to-step transitions found."
+            if len(df) > 0:
+                self.markov_status.object += f"<br>**Error:** Found {len(df)} rows, but NO patient had 2 or more consecutive timepoints. Check that you selected the correct Patient ID (currently '{p_col}')."
+            else:
+                self.markov_status.object += "<br>**Error:** No valid step-to-step transitions found."
             return
             
         # 1. Baseline Transition Matrix Heatmap
@@ -543,24 +612,43 @@ class TimeSeriesController:
         state_counts['Prob'] = state_counts['Count'] / state_counts['Total']
         
         states = sorted(list(set(trans_df[state_col].unique()) | set(trans_df['Next_State'].unique())))
-        state_counts[state_col] = state_counts[state_col].astype(str)
-        state_counts['Next_State'] = state_counts['Next_State'].astype(str)
         states_str = [str(s) for s in states]
         
-        p = figure(width=400, height=400, title="Transition Probabilities",
+        state_counts[state_col] = state_counts[state_col].astype(str)
+        state_counts['Next_State'] = state_counts['Next_State'].astype(str)
+        
+        import itertools
+        full_grid = pd.DataFrame(list(itertools.product(states_str, states_str)), columns=[state_col, 'Next_State'])
+        state_counts = pd.merge(full_grid, state_counts, on=[state_col, 'Next_State'], how='left')
+        
+        state_counts['Prob'] = state_counts['Prob'].fillna(0.0)
+        state_counts['Count'] = state_counts['Count'].fillna(0)
+        state_counts['Total'] = state_counts['Total'].fillna(0)
+        state_counts['Prob_Str'] = state_counts['Prob'].apply(lambda x: f"{x:.2f}")
+        
+        from bokeh.palettes import Blues8
+        from bokeh.models import ColorBar
+        
+        # User requested: X-axis = "initial state", Y-axis = "next state"
+        p = figure(width=450, height=400, title=f"Transition Probabilities ({state_col})",
                    x_range=states_str, y_range=states_str[::-1],
                    toolbar_location="right", tools="hover,save")
                    
-        p.xaxis.axis_label = "Next State"
-        p.yaxis.axis_label = "Current State"
+        import math
+        p.xaxis.axis_label = "Initial State"
+        p.yaxis.axis_label = "Next State"
+        p.xaxis.major_label_orientation = math.pi/4
         
-        cmap = LinearColorMapper(palette="Blues8", low=0, high=1.0)
+        if self.markov_svg_export.value:
+            p.output_backend = "svg"
+        
+        cmap = LinearColorMapper(palette=Blues8[::-1], low=0, high=1.0)
         src = ColumnDataSource(state_counts)
-        p.rect(x="Next_State", y=state_col, width=1, height=1, source=src,
-               line_color="white", fill_color={"field": "Prob", "transform": cmap})
+        p.rect(x=state_col, y="Next_State", width=1, height=1, source=src,
+               line_color="black", fill_color={"field": "Prob", "transform": cmap})
                
-        p.text(x="Next_State", y=state_col, text="Prob", text_color="black",
-               text_align="center", text_baseline="middle", source=src)
+        p.text(x=state_col, y="Next_State", text="Prob_Str", text_color="gray",
+               text_font_size="9pt", text_align="center", text_baseline="middle", source=src)
                
         hover = p.select_one(HoverTool)
         hover.tooltips = [
@@ -569,12 +657,86 @@ class TimeSeriesController:
             ("N", "@Count / @Total")
         ]
         
-        self.markov_plot.object = p
-        self.markov_plot.visible = True
+        cbar = ColorBar(color_mapper=cmap, width=8, location=(0,0))
+        p.add_layout(cbar, 'right')
+        
+        # 1b. Transition Network Graph
+        import numpy as np
+        from bokeh.models import Arrow, NormalHead
+        
+        N = len(states_str)
+        p2 = figure(width=650, height=650, title=f"Transition Network ({state_col})",
+                    x_range=(-1.8, 1.8), y_range=(-1.8, 1.8),
+                    toolbar_location=None, tools="")
+        p2.axis.visible = False
+        p2.grid.visible = False
+        
+        nodes = {}
+        for i, s in enumerate(states_str):
+            angle = 2 * np.pi * i / N - np.pi / 2
+            nodes[s] = (np.cos(angle), np.sin(angle), angle)
+            
+        # Draw edges first so they are behind nodes
+        for idx, row in state_counts.iterrows():
+            u = row[state_col]
+            v = row['Next_State']
+            prob = row['Prob']
+            if prob <= 0: continue
+            
+            thick = max(1, int(prob * 10))
+            if u == v:
+                angle = nodes[u][2]
+                cx = nodes[u][0] + 0.15 * np.cos(angle)
+                cy = nodes[u][1] + 0.15 * np.sin(angle)
+                p2.circle([cx], [cy], radius=0.2, fill_color=None, line_color="black", line_width=thick)
+                tx = nodes[u][0] + 0.45 * np.cos(angle)
+                ty = nodes[u][1] + 0.45 * np.sin(angle)
+                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray")
+            else:
+                xA, yA, _ = nodes[u]
+                xB, yB, _ = nodes[v]
+                dx = xB - xA
+                dy = yB - yA
+                length = np.hypot(dx, dy)
+                ux, uy = dx/length, dy/length
+                nx, ny = uy, -ux
+                
+                offset = 0.1
+                gap = 0.2
+                sx = xA + nx*offset + ux*gap
+                sy = yA + ny*offset + uy*gap
+                ex = xB + nx*offset - ux*gap
+                ey = yB + ny*offset - uy*gap
+                
+                arrow = Arrow(end=NormalHead(size=10, fill_color="black", line_color="black"),
+                              x_start=sx, y_start=sy, x_end=ex, y_end=ey,
+                              line_color="black", line_width=thick)
+                p2.add_layout(arrow)
+                
+                tx = (sx + ex)/2 + nx*0.1
+                ty = (sy + ey)/2 + ny*0.1
+                p2.text([tx], [ty], text=[f"{prob:.2f}"], text_align="center", text_baseline="middle", text_font_size="8pt", text_color="gray")
+                
+        if self.markov_svg_export.value:
+            p2.output_backend = "svg"
+            
+        # Draw nodes on top
+        node_x = [nodes[s][0] for s in states_str]
+        node_y = [nodes[s][1] for s in states_str]
+        states_capped = [s[:12] for s in states_str]
+        p2.circle(node_x, node_y, size=80, color="lightblue", line_color="black")
+        p2.text(x=node_x, y=node_y, text=states_capped, text_align="center", text_baseline="middle", text_font_style="bold", text_font_size="10pt")
+                
+        plot_col = pn.Column(pn.pane.Bokeh(p), pn.pane.Bokeh(p2))
+        self.markov_results_container.append(plot_col)
         
         # 2. Covariate Statistical Analysis
         if cov_col == "None":
-            self.markov_status.object = "Baseline transitions calculated (No covariate selected)."
+            msg = "Baseline transitions calculated (No covariate selected)."
+            if "Excluded" in self.markov_status.object:
+                self.markov_status.object += msg
+            else:
+                self.markov_status.object = msg
             return
             
         # Construct X
