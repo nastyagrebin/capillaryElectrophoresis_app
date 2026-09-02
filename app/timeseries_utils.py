@@ -891,6 +891,8 @@ class TimeSeriesController:
                 from bokeh.models import Span
                 
                 full_grid = pd.DataFrame(list(itertools.product(states_str, states_str)), columns=['From', 'To'])
+                plot_df['From'] = plot_df['From'].astype(str)
+                plot_df['To'] = plot_df['To'].astype(str)
                 heat_df = pd.merge(full_grid, plot_df, on=['From', 'To'], how='left')
                 
                 heat_df['Score'] = 0.0
