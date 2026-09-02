@@ -288,13 +288,13 @@ def nmf_group_importance_dashboard_stable(
     t_eval = np.linspace(lo, hi, max(1000, K*10))
     A_eval = Phi(t_eval)
     
-    from bokeh.palettes import Category10, Magma256
+    import common_plot
     
     n_groups = len(groups)
-    if n_groups <= 10:
-        palette = list(Category10[10])
+    if common_plot.is_categorical():
+        palette = common_plot._palette(n_groups)
     else:
-        palette = [Magma256[i] for i in np.linspace(0, 255, n_groups, dtype=int)]
+        palette = common_plot._palette(n_groups, force_name="glasbey")
         
     # Calculate all data first
     group_data = []
@@ -335,7 +335,7 @@ def nmf_group_importance_dashboard_stable(
         recon_fig.legend.click_policy = "hide"
         recon_fig.add_layout(recon_fig.legend[0], 'above')
 
-    jitter_src = ColumnDataSource(data=dict(x=[], y=[], group=[], sample_id=[]))
+    jitter_src = ColumnDataSource(data=dict(x=[], y=[], group=[], sample_id=[], color=[]))
     jitter_fig = figure(
         width=600, height=360,
         x_axis_label="group",
@@ -346,7 +346,7 @@ def nmf_group_importance_dashboard_stable(
     )
     if svg_export_mode:
         jitter_fig.output_backend = "svg"
-    jitter_r = jitter_fig.circle("x", "y", source=jitter_src, size=7, fill_alpha=0.75, line_alpha=0.25)
+    jitter_r = jitter_fig.circle("x", "y", color="color", source=jitter_src, size=7, fill_alpha=0.75, line_alpha=0.25)
     jitter_fig.add_tools(HoverTool(renderers=[jitter_r], tooltips=[("sample", "@sample_id"), ("group", "@group"), ("loading", "@y{0.000}")]))
     jitter_fig.xaxis.ticker = list(range(len(groups)))
     jitter_fig.xaxis.formatter = CustomJSTickFormatter(code=f"""
@@ -370,6 +370,7 @@ def nmf_group_importance_dashboard_stable(
             y=ys,
             group=d[group_col].astype(str).to_numpy(),
             sample_id=d["_sid"].astype(str).to_numpy(),
+            color=[palette[x_map[g] % len(palette)] for g in d[group_col].astype(str)]
         )
 
         q = float(stats.loc[b, "q_value"]) if b in stats.index else float("nan")
