@@ -314,7 +314,7 @@ def nmf_group_importance_dashboard_stable(
             # thin lines for each sample
             xs = [t_eval for _ in range(len(yhat_list))]
             ys = yhat_list
-            recon_fig.multi_line(xs=xs, ys=ys, line_color=g_color, line_alpha=0.5, line_width=1)
+            recon_fig.multi_line(xs=xs, ys=ys, line_color="gray", line_alpha=0.5, line_width=1)
             
             # thick average line
             y_avg = np.mean(yhat_list, axis=0)
@@ -322,8 +322,9 @@ def nmf_group_importance_dashboard_stable(
 
     if recon_fig.legend:
         recon_fig.legend.location = "top_left"
+        recon_fig.legend.orientation = "horizontal"
         recon_fig.legend.click_policy = "hide"
-        recon_fig.add_layout(recon_fig.legend[0], 'right')
+        recon_fig.add_layout(recon_fig.legend[0], 'above')
 
     jitter_src = ColumnDataSource(data=dict(x=[], y=[], group=[], sample_id=[]))
     jitter_fig = figure(
