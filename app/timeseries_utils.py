@@ -862,6 +862,18 @@ class TimeSeriesController:
             else:
                 res_df = res_df.sort_values('p-value')
                 
+            def generate_interpretation(row):
+                if pd.notnull(row.get('Odds Ratio')):
+                    direction = "increase" if row['Odds Ratio'] > 1 else "decrease"
+                elif pd.notnull(row.get('Coef')):
+                    direction = "increase" if row['Coef'] > 0 else "decrease"
+                else:
+                    return "Direction unavailable (Chi2 test/insufficient data)"
+                
+                return f"Higher {cov_col} values at {timing} {direction} the likelihood of transition from {row['From']} to {row['To']}"
+                
+            res_df['Interpretation'] = res_df.apply(generate_interpretation, axis=1)
+                
             # Format numeric columns for display
             for col in ['Odds Ratio', 'Coef', 'p-value', 'FDR_p']:
                 if col in res_df.columns:
