@@ -889,8 +889,6 @@ class TimeSeriesController:
                 # Covariate Heatmap
                 import itertools
                 from bokeh.models import Span, LinearColorMapper, ColorBar, ColumnDataSource
-                import math
-                from bokeh.plotting import figure
                 
                 full_grid = pd.DataFrame(list(itertools.product(states_str, states_str)), columns=['From', 'To'])
                 heat_df = pd.merge(full_grid, plot_df, on=['From', 'To'], how='left')
