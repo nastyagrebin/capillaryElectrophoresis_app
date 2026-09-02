@@ -273,7 +273,7 @@ def nmf_group_importance_dashboard_stable(
     # Add Reconstruction Figure
     recon_fig = figure(
         width=800, height=250,
-        title="Sample Reconstruction (asinh)",
+        title="Sample Reconstruction by Group (asinh)",
         tools="pan,wheel_zoom,box_zoom,reset,save",
         toolbar_location="above",
         x_axis_label="Pseudotime",
@@ -284,27 +284,46 @@ def nmf_group_importance_dashboard_stable(
     recon_fig.xaxis[0].ticker = sig_fig.xaxis[0].ticker
     if svg_export_mode:
         recon_fig.output_backend = "svg"
-    
-    recon_src = ColumnDataSource(dict(t=[], y=[]))
-    recon_fig.line('t', 'y', source=recon_src, line_color="black", line_width=2)
-
-    sample_list = list(H["_sid"].astype(str).unique())
-    recon_sample_sel = pn.widgets.Select(name="Select Sample for Reconstruction", options=sample_list, value=sample_list[0])
-
+        
     t_eval = np.linspace(lo, hi, max(1000, K*10))
     A_eval = Phi(t_eval)
+    
+    from bokeh.palettes import Category10, Magma256
+    
+    n_groups = len(groups)
+    if n_groups <= 10:
+        palette = list(Category10[10])
+    else:
+        palette = [Magma256[i] for i in np.linspace(0, 255, n_groups, dtype=int)]
+        
+    for i, g in enumerate(groups):
+        g_color = palette[i % len(palette)]
+        # get samples in this group
+        g_sids = merged[merged[group_col] == g]["_sid"].astype(str).tolist()
+        
+        # calculate yhat for all these samples
+        yhat_list = []
+        for s in g_sids:
+            row = H[H["_sid"].astype(str) == s]
+            if len(row) > 0:
+                h_vals = row.iloc[0][stats_sorted["basis"]].values.astype(float)
+                yhat = A_eval @ h_vals
+                yhat_list.append(np.arcsinh(yhat))
+                
+        if len(yhat_list) > 0:
+            # thin lines for each sample
+            xs = [t_eval for _ in range(len(yhat_list))]
+            ys = yhat_list
+            recon_fig.multi_line(xs=xs, ys=ys, line_color=g_color, line_alpha=0.5, line_width=1)
+            
+            # thick average line
+            y_avg = np.mean(yhat_list, axis=0)
+            recon_fig.line(x=t_eval, y=y_avg, line_color=g_color, line_alpha=1.0, line_width=3, legend_label=str(g))
 
-    def _update_recon(*events):
-        s = str(recon_sample_sel.value)
-        recon_fig.title.text = f"Sample Reconstruction: {s} (asinh)"
-        row = H[H["_sid"].astype(str) == s]
-        if len(row) > 0:
-            h_vals = row.iloc[0][stats_sorted["basis"]].values.astype(float)
-            yhat = A_eval @ h_vals
-            recon_src.data = dict(t=t_eval, y=np.arcsinh(yhat))
-
-    recon_sample_sel.param.watch(_update_recon, "value")
-    _update_recon()
+    if recon_fig.legend:
+        recon_fig.legend.location = "top_left"
+        recon_fig.legend.click_policy = "hide"
+        recon_fig.add_layout(recon_fig.legend[0], 'right')
 
     jitter_src = ColumnDataSource(data=dict(x=[], y=[], group=[], sample_id=[]))
     jitter_fig = figure(
@@ -357,7 +376,6 @@ def nmf_group_importance_dashboard_stable(
         stats_pane,
         pn.Row(download_btn),
         pn.layout.Divider(),
-        pn.Row(recon_sample_sel),
         pn.Row(pn.pane.Bokeh(recon_fig), sizing_mode="stretch_width"),
         pn.Row(pn.pane.Bokeh(sig_fig), sizing_mode="stretch_width"),
         pn.Row(pn.pane.Bokeh(pval_fig), sizing_mode="stretch_width"),
