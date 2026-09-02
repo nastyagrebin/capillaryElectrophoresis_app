@@ -58,7 +58,7 @@ class TimeSeriesController:
         self.markov_btn = pn.widgets.Button(name="Run Markov Analysis", button_type="primary")
         self.markov_btn.on_click(self._on_markov_run)
         self.markov_status = pn.pane.Markdown("")
-        self.markov_results_container = pn.Row(sizing_mode="stretch_width")
+        self.markov_results_container = pn.Column(sizing_mode="stretch_width")
         self.markov_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=250, sizing_mode="stretch_width", visible=False)
         
         # Slicing UI
