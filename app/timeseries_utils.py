@@ -876,9 +876,108 @@ class TimeSeriesController:
 - **Odds Ratio < 1 (Negative Coef)**: Higher covariate values decrease the likelihood.
 - **FDR_p < 0.05**: The association is statistically significant after correcting for multiple comparisons.
 """
+            # Build plotting df (keep raw values)
+            plot_df = res_df.copy()
+            for col in ['Odds Ratio', 'Coef', 'p-value', 'FDR_p']:
+                plot_df[col] = pd.to_numeric(plot_df[col], errors='coerce')
+                
+            # Replace infinity with NaN to prevent Bokeh JS renderer crashes
+            import numpy as np
+            plot_df = plot_df.replace([np.inf, -np.inf], np.nan)
+            
+            try:
+                # Covariate Heatmap
+                import itertools
+                from bokeh.models import Span, LinearColorMapper, ColorBar, ColumnDataSource
+                import math
+                from bokeh.plotting import figure
+                
+                full_grid = pd.DataFrame(list(itertools.product(states_str, states_str)), columns=['From', 'To'])
+                heat_df = pd.merge(full_grid, plot_df, on=['From', 'To'], how='left')
+                
+                heat_df['Score'] = 0.0
+                mask = heat_df['FDR_p'].notnull() & heat_df['Odds Ratio'].notnull()
+                
+                fdr_safe = np.where(heat_df['FDR_p'] == 0, 1e-10, heat_df['FDR_p'])
+                heat_df.loc[mask, 'Score'] = -np.log10(fdr_safe[mask]) * np.sign(np.log(heat_df.loc[mask, 'Odds Ratio'].astype(float) + 1e-10))
+                
+                def make_label(row):
+                    if pd.isna(row['Odds Ratio']):
+                        return ""
+                    fdr_str = f"FDR: {row['FDR_p']:.3f}" if not pd.isna(row['FDR_p']) else ""
+                    or_str = f"OR: {row['Odds Ratio']:.2f}"
+                    return f"{or_str}\n{fdr_str}"
+                    
+                heat_df['Label'] = heat_df.apply(make_label, axis=1)
+                
+                p3 = figure(width=400, height=400, title=f"Covariate Effect Heatmap ({cov_col})",
+                           x_range=states_str, y_range=states_str[::-1],
+                           toolbar_location="right", tools="hover,save")
+                
+                p3.xaxis.axis_label = "Initial State"
+                p3.yaxis.axis_label = "Next State"
+                p3.xaxis.major_label_orientation = math.pi/4
+                
+                from bokeh.palettes import RdBu10
+                cmap3 = LinearColorMapper(palette=RdBu10[::-1], low=-3, high=3)
+                src3 = ColumnDataSource(heat_df)
+                p3.rect(x="From", y="To", width=1, height=1, source=src3,
+                       line_color="white", fill_color={"field": "Score", "transform": cmap3})
+                       
+                p3.text(x="From", y="To", text="Label", text_color="gray",
+                       text_align="center", text_baseline="middle", text_font_size="9pt", source=src3)
+                
+                cbar3 = ColorBar(color_mapper=cmap3, width=8, location=(0,0), title="-log(FDR) * dir")
+                p3.add_layout(cbar3, 'right')
+                
+                # Forest Plot
+                forest_df = plot_df.dropna(subset=['Odds Ratio', 'CI_Lower']).copy()
+                if not forest_df.empty:
+                    forest_df['Transition'] = forest_df['From'] + " -> " + forest_df['To']
+                    if 'FDR_p' in forest_df.columns:
+                        forest_df = forest_df.sort_values('FDR_p', ascending=False)
+                    
+                    trans_list = forest_df['Transition'].tolist()
+                    
+                    p4 = figure(width=500, height=max(200, len(forest_df)*40 + 50), title="Forest Plot (Odds Ratios)",
+                                y_range=trans_list, x_axis_type="log", toolbar_location="right", tools="hover,save")
+                    p4.xaxis.axis_label = "Odds Ratio (log scale)"
+                    
+                    # Safe min/max for x-axis to prevent bokeh crashes
+                    min_x = max(0.01, forest_df['CI_Lower'].min() * 0.5)
+                    max_x = min(100, forest_df['CI_Upper'].max() * 1.5)
+                    if min_x >= max_x:
+                        min_x, max_x = 0.01, 100
+                    p4.x_range.start = min_x
+                    p4.x_range.end = max_x
+                    
+                    src4 = ColumnDataSource(forest_df)
+                    p4.segment(x0="CI_Lower", x1="CI_Upper", y0="Transition", y1="Transition", source=src4, line_width=2, line_color="black")
+                    p4.circle(x="Odds Ratio", y="Transition", source=src4, size=8, color="blue")
+                    
+                    vline = Span(location=1, dimension='height', line_dash='dashed', line_color='red', line_width=2)
+                    p4.add_layout(vline)
+                    
+                    if self.markov_svg_export.value:
+                        p3.output_backend = "svg"
+                        p4.output_backend = "svg"
+                        
+                    viz_row = pn.Row(pn.pane.Bokeh(p3), pn.pane.Bokeh(p4))
+                else:
+                    if self.markov_svg_export.value:
+                        p3.output_backend = "svg"
+                    viz_row = pn.Row(pn.pane.Bokeh(p3))
+                    
+                self.markov_status.object += "<br>✅ Covariate Heatmap and Forest Plot successfully rendered."
+            except Exception as e:
+                viz_row = pn.pane.Markdown(f"**Error plotting covariate visuals:** {str(e)}")
+                self.markov_status.object += f"<br>❌ Error plotting visuals: {str(e)}"
+                
             table_col = pn.Column(
                 pn.pane.Markdown(interpretation, sizing_mode="stretch_width"),
-                pn.widgets.Tabulator(res_df, sizing_mode="stretch_width", height=500, pagination=None, show_index=False),
+                pn.widgets.Tabulator(res_df, sizing_mode="stretch_width", height=300, pagination=None, show_index=False),
+                pn.pane.Markdown("### Covariate Visualizations", sizing_mode="stretch_width"),
+                viz_row,
                 sizing_mode="stretch_width"
             )
             self.markov_results_container.append(table_col)
