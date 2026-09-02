@@ -755,6 +755,10 @@ class TimeSeriesController:
             self.markov_status.object = "**Error:** Covariate data is empty for transitions."
             return
             
+        # Clean string covariates to prevent invisible categories from spacing
+        if trans_df['X'].dtype == object:
+            trans_df['X'] = trans_df['X'].astype(str).str.strip()
+            
         # Is X continuous or categorical?
         try:
             trans_df['X'] = pd.to_numeric(trans_df['X'])
@@ -821,7 +825,12 @@ class TimeSeriesController:
                     # Categorical X -> Chi-square or Fisher
                     from scipy.stats import fisher_exact, chi2_contingency
                     contingency = pd.crosstab(y, X)
-                    if contingency.shape == (2,2):
+                    if contingency.shape[1] < 2 or contingency.shape[0] < 2:
+                        results.append({
+                            'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
+                            'Odds Ratio': np.nan, 'CI_Lower': np.nan, 'CI_Upper': np.nan, 'Coef': np.nan, 'p-value': np.nan, 'Test': 'Invariant Covariate'
+                        })
+                    elif contingency.shape == (2,2):
                         oddsr, pval = fisher_exact(contingency)
                         try:
                             a, b = contingency.iloc[1,1], contingency.iloc[1,0]
