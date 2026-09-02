@@ -296,12 +296,12 @@ def nmf_group_importance_dashboard_stable(
     else:
         palette = [Magma256[i] for i in np.linspace(0, 255, n_groups, dtype=int)]
         
+    # Calculate all data first
+    group_data = []
     for i, g in enumerate(groups):
         g_color = palette[i % len(palette)]
-        # get samples in this group
         g_sids = merged[merged[group_col] == g]["_sid"].astype(str).tolist()
         
-        # calculate yhat for all these samples
         yhat_list = []
         for s in g_sids:
             row = H[H["_sid"].astype(str) == s]
@@ -311,14 +311,23 @@ def nmf_group_importance_dashboard_stable(
                 yhat_list.append(np.arcsinh(yhat))
                 
         if len(yhat_list) > 0:
-            # thin lines for each sample
-            xs = [t_eval for _ in range(len(yhat_list))]
-            ys = yhat_list
-            recon_fig.multi_line(xs=xs, ys=ys, line_color="gray", line_alpha=0.5, line_width=1)
-            
-            # thick average line
-            y_avg = np.mean(yhat_list, axis=0)
-            recon_fig.line(x=t_eval, y=y_avg, line_color=g_color, line_alpha=1.0, line_width=3, legend_label=str(g))
+            group_data.append({
+                'g': g,
+                'g_color': g_color,
+                'yhat_list': yhat_list
+            })
+
+    # Pass 1: Draw ALL thin gray lines first (so they are in the background)
+    for data in group_data:
+        xs = [t_eval for _ in range(len(data['yhat_list']))]
+        ys = data['yhat_list']
+        # line_width=0.8 is 20% thinner than 1.0
+        recon_fig.multi_line(xs=xs, ys=ys, line_color="gray", line_alpha=0.5, line_width=0.8)
+
+    # Pass 2: Draw ALL thick colored averages on top
+    for data in group_data:
+        y_avg = np.mean(data['yhat_list'], axis=0)
+        recon_fig.line(x=t_eval, y=y_avg, line_color=data['g_color'], line_alpha=1.0, line_width=3, legend_label=str(data['g']))
 
     if recon_fig.legend:
         recon_fig.legend.location = "top_left"
