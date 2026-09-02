@@ -55,6 +55,7 @@ class TimeSeriesController:
         self.markov_time_type.param.watch(self._toggle_markov_time_order, 'value')
         
         self.markov_svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
+        self.markov_show_text = pn.widgets.Checkbox(name="Show text on heatmaps", value=True)
         self.markov_btn = pn.widgets.Button(name="Run Markov Analysis", button_type="primary")
         self.markov_btn.on_click(self._on_markov_run)
         self.markov_status = pn.pane.Markdown("")
@@ -113,7 +114,7 @@ class TimeSeriesController:
             pn.pane.Markdown("### 4. Markov State Transitions"),
             pn.Row(self.markov_patient, self.markov_time, pn.Column("Time variable type:", self.markov_time_type), self.markov_time_order),
             pn.Row(self.markov_state, self.markov_cov, self.markov_timing),
-            pn.Row(self.markov_svg_export, pn.Spacer(width=12), self.markov_btn, self.markov_status),
+            pn.Row(self.markov_svg_export, self.markov_show_text, pn.Spacer(width=12), self.markov_btn, self.markov_status),
             self.markov_results_container,
             sizing_mode="stretch_width"
         )
@@ -647,8 +648,9 @@ class TimeSeriesController:
         p.rect(x=state_col, y="Next_State", width=1, height=1, source=src,
                line_color="black", fill_color={"field": "Prob", "transform": cmap})
                
-        p.text(x=state_col, y="Next_State", text="Prob_Str", text_color="gray",
-               text_font_size="9pt", text_align="center", text_baseline="middle", source=src)
+        if self.markov_show_text.value:
+            p.text(x=state_col, y="Next_State", text="Prob_Str", text_color="gray",
+                   text_font_size="9pt", text_align="center", text_baseline="middle", source=src)
                
         hover = p.select_one(HoverTool)
         hover.tooltips = [
@@ -905,14 +907,21 @@ class TimeSeriesController:
                     if pd.isna(row['Odds Ratio']):
                         return ""
                     fdr_str = f"FDR: {row['FDR_p']:.3f}" if not pd.isna(row['FDR_p']) else ""
-                    or_str = f"OR: {row['Odds Ratio']:.2f}"
+                    or_str = f"OR: {row['Odds Ratio']:.1e}"
                     return f"{or_str}\n{fdr_str}"
                     
                 heat_df['Label'] = heat_df.apply(make_label, axis=1)
                 
+                hover3 = HoverTool(tooltips=[
+                    ("Transition", "@From -> @To"),
+                    ("OR", "@{Odds Ratio}{0.0e}"),
+                    ("95% CI", "@{CI_Lower}{0.0e} - @{CI_Upper}{0.0e}"),
+                    ("FDR", "@{FDR_p}{0.000}")
+                ])
+                
                 p3 = figure(width=400, height=400, title=f"Covariate Effect Heatmap ({cov_col})",
                            x_range=states_str, y_range=states_str[::-1],
-                           toolbar_location="right", tools="hover,save")
+                           toolbar_location="right", tools=[hover3, "save"])
                 
                 p3.xaxis.axis_label = "Initial State"
                 p3.yaxis.axis_label = "Next State"
@@ -924,8 +933,9 @@ class TimeSeriesController:
                 p3.rect(x="From", y="To", width=1, height=1, source=src3,
                        line_color="white", fill_color={"field": "Score", "transform": cmap3})
                        
-                p3.text(x="From", y="To", text="Label", text_color="gray",
-                       text_align="center", text_baseline="middle", text_font_size="9pt", source=src3)
+                if self.markov_show_text.value:
+                    p3.text(x="From", y="To", text="Label", text_color="gray",
+                           text_align="center", text_baseline="middle", text_font_size="9pt", source=src3)
                 
                 cbar3 = ColorBar(color_mapper=cmap3, width=8, location=(0,0), title="-log(FDR) * dir")
                 p3.add_layout(cbar3, 'right')
