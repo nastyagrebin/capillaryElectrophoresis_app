@@ -763,10 +763,17 @@ class TimeSeriesController:
         # For each starting state A, test if X predicts going to B
         for stateA in states:
             df_A = trans_df[trans_df[state_col] == stateA]
-            if len(df_A) < 5: continue # Need minimum samples
-            
-            # What are the next states from A?
             next_states = df_A['Next_State'].unique()
+            
+            if len(df_A) < 5:
+                for stateB in next_states:
+                    n_B = len(df_A[df_A['Next_State'] == stateB])
+                    results.append({
+                        'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
+                        'Odds Ratio': float('nan'), 'CI_Lower': float('nan'), 'CI_Upper': float('nan'), 'Coef': float('nan'), 'p-value': float('nan'), 'Test': 'Insufficient N (Total < 5)'
+                    })
+                continue
+                
             for stateB in next_states:
                 df_A_to_B = df_A[df_A['Next_State'] == stateB]
                 df_A_to_Other = df_A[df_A['Next_State'] != stateB]
@@ -775,7 +782,11 @@ class TimeSeriesController:
                 n_Other = len(df_A_to_Other)
                 
                 if n_B < 3 or n_Other < 3:
-                    continue # Not enough data to run logit or tests reliably
+                    results.append({
+                        'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
+                        'Odds Ratio': float('nan'), 'CI_Lower': float('nan'), 'CI_Upper': float('nan'), 'Coef': float('nan'), 'p-value': float('nan'), 'Test': 'Insufficient N (<3)'
+                    })
+                    continue
                     
                 y = (df_A['Next_State'] == stateB).astype(int)
                 X = df_A['X']
@@ -790,9 +801,10 @@ class TimeSeriesController:
                         pval = res.pvalues['X']
                         coef = res.params['X']
                         or_val = np.exp(coef)
+                        ci = res.conf_int().loc['X']
                         results.append({
                             'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
-                            'Odds Ratio': or_val, 'Coef': coef, 'p-value': pval, 'Test': 'Logit'
+                            'Odds Ratio': or_val, 'CI_Lower': np.exp(ci[0]), 'CI_Upper': np.exp(ci[1]), 'Coef': coef, 'p-value': pval, 'Test': 'Logit'
                         })
                     except:
                         # Fallback to Mann-Whitney
@@ -800,7 +812,7 @@ class TimeSeriesController:
                         stat, pval = mannwhitneyu(X[y==1], X[y==0], alternative='two-sided')
                         results.append({
                             'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
-                            'Odds Ratio': np.nan, 'Coef': np.nan, 'p-value': pval, 'Test': 'MWU'
+                            'Odds Ratio': np.nan, 'CI_Lower': np.nan, 'CI_Upper': np.nan, 'Coef': np.nan, 'p-value': pval, 'Test': 'MWU'
                         })
                 else:
                     # Categorical X -> Chi-square or Fisher
@@ -808,16 +820,26 @@ class TimeSeriesController:
                     contingency = pd.crosstab(y, X)
                     if contingency.shape == (2,2):
                         oddsr, pval = fisher_exact(contingency)
+                        try:
+                            a, b = contingency.iloc[1,1], contingency.iloc[1,0]
+                            c, d = contingency.iloc[0,1], contingency.iloc[0,0]
+                            se = np.sqrt(1/(a+0.5) + 1/(b+0.5) + 1/(c+0.5) + 1/(d+0.5))
+                            log_or = np.log(oddsr) if oddsr > 0 else np.nan
+                            cil = np.exp(log_or - 1.96*se)
+                            ciu = np.exp(log_or + 1.96*se)
+                        except:
+                            cil, ciu = np.nan, np.nan
+                            
                         results.append({
                             'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
-                            'Odds Ratio': oddsr, 'Coef': np.nan, 'p-value': pval, 'Test': 'Fisher'
+                            'Odds Ratio': oddsr, 'CI_Lower': cil, 'CI_Upper': ciu, 'Coef': np.nan, 'p-value': pval, 'Test': 'Fisher'
                         })
                     else:
                         try:
                             chi2, pval, dof, ex = chi2_contingency(contingency)
                             results.append({
                                 'From': stateA, 'To': stateB, 'N (Event/Total)': f"{n_B}/{len(df_A)}",
-                                'Odds Ratio': np.nan, 'Coef': np.nan, 'p-value': pval, 'Test': 'Chi2'
+                                'Odds Ratio': np.nan, 'CI_Lower': np.nan, 'CI_Upper': np.nan, 'Coef': np.nan, 'p-value': pval, 'Test': 'Chi2'
                             })
                         except:
                             pass
@@ -833,17 +855,36 @@ class TimeSeriesController:
                 res_df['FDR_p'] = np.nan
                 res_df.loc[valid_idx, 'FDR_p'] = pvals_fdr
                 
-            res_df = res_df.sort_values('p-value')
+            if 'FDR_p' in res_df.columns:
+                res_df = res_df.sort_values(['FDR_p', 'p-value'])
+            else:
+                res_df = res_df.sort_values('p-value')
+                
             # Format numeric columns for display
             for col in ['Odds Ratio', 'Coef', 'p-value', 'FDR_p']:
                 if col in res_df.columns:
                     res_df[col] = res_df[col].apply(lambda x: f"{x:.4g}" if pd.notnull(x) else "")
                     
-            self.markov_table.object = res_df
-            self.markov_table.visible = True
-            self.markov_status.object = "Analysis complete."
+            interpretation = """
+**Statistical Tests Performed:**
+- **Continuous Covariates**: Logistic Regression is used to test if the numeric value of the covariate predicts the binary outcome of transitioning to the "To" state (vs all other available states). If regression fails, it falls back to a non-parametric Mann-Whitney U test.
+- **Categorical Covariates**: Fisher's Exact Test (for 2x2) or Chi-Square Test is used.
+- **FDR**: p-values are corrected for multiple comparisons using the Benjamini-Hochberg method.
+
+**How to interpret these results:**
+- **Odds Ratio > 1 (Positive Coef)**: Higher covariate values increase the likelihood of transitioning to the "To" state instead of any other state.
+- **Odds Ratio < 1 (Negative Coef)**: Higher covariate values decrease the likelihood.
+- **FDR_p < 0.05**: The association is statistically significant after correcting for multiple comparisons.
+"""
+            table_col = pn.Column(
+                pn.pane.Markdown(interpretation, sizing_mode="stretch_width"),
+                pn.widgets.Tabulator(res_df, sizing_mode="stretch_width", height=500, pagination=None, show_index=False),
+                sizing_mode="stretch_width"
+            )
+            self.markov_results_container.append(table_col)
+            self.markov_status.object += "<br>Analysis complete."
         else:
-            self.markov_status.object = "Analysis complete, but no valid tests could be run (insufficient N)."
+            self.markov_status.object += "<br>Analysis complete, but no valid tests could be run (insufficient N)."
 
 def build_timeseries_section():
     ctrl = TimeSeriesController()
