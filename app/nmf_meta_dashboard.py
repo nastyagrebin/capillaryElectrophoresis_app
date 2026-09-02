@@ -272,7 +272,7 @@ def nmf_group_importance_dashboard_stable(
 
     # Add Reconstruction Figure
     recon_fig = figure(
-        width=800, height=250,
+        width=800, height=300,
         title="Sample Reconstruction by Group (asinh)",
         tools="pan,wheel_zoom,box_zoom,reset,save",
         toolbar_location="above",
