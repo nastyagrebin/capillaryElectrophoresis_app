@@ -298,7 +298,8 @@ class TimeSeriesController:
         
         df = current_df[[x_col, y_col, p_col]].copy()
         if color_col != "None":
-            df[color_col] = current_df[color_col]
+            # Treat color variable as categorical by casting to string
+            df[color_col] = current_df[color_col].astype(str)
         df = df.dropna()
         if df.empty:
             self.status.object = "**Warning:** Plotting data is empty after removing NaNs."
