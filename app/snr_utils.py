@@ -94,8 +94,8 @@ class SNRController:
         self.csv_name = pn.widgets.TextInput(name="CSV filename", value="snr_results.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
             label="Download SNR CSV", filename="snr_results.csv",
-            button_type="primary", embed=True, auto=False,
-            file=io.BytesIO(b""), disabled=True,
+            button_type="primary", embed=False, auto=False,
+            callback=lambda: io.BytesIO(b""), disabled=True,
         )
         self.csv_name.param.watch(
             lambda e: setattr(self.csv_download, "filename", e.new or "snr_results.csv"), "value"
@@ -370,11 +370,13 @@ class SNRController:
         self.results_df = pd.DataFrame(rows).set_index("Sample")
         self.results_table.value = self.results_df.reset_index()
         
-        bio = io.BytesIO()
-        self.results_df.to_csv(bio)
-        bio.seek(0)
-        self.csv_download.file = bio
-        
+        def get_csv_bytes():
+            b = io.BytesIO()
+            self.results_df.to_csv(b)
+            b.seek(0)
+            return b
+            
+        self.csv_download.callback = get_csv_bytes
         self.csv_download.disabled = False
         self.status.object = ok(f"SNR calculated for {len(rows)} sample(s).")
 
