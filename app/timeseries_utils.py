@@ -7,7 +7,7 @@ from statsmodels.stats.multitest import multipletests
 from scipy.stats import chi2_contingency, fisher_exact, mannwhitneyu, kruskal
 import panel as pn
 from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper, ColorBar, Range1d, Span
+from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper, ColorBar, Range1d, Span, SaveTool
 from bokeh.palettes import Category10, Magma256
 
 def fdr_bh(pvals):
@@ -66,13 +66,14 @@ class TimeSeriesController:
         self.change_cat_timing = pn.widgets.Select(name="Category X-axis Timing", options=["Timepoint B", "Timepoint A"], value="Timepoint B", width=180)
         self.change_stat = pn.widgets.RadioButtonGroup(name="Stat Test", options=["Mann-Whitney", "Kruskal-Wallis"], value="Mann-Whitney")
         self.change_fdr = pn.widgets.Checkbox(name="FDR Correction (BH)", value=True)
+        self.change_svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
         self.change_plot_warning = pn.pane.Markdown("", visible=False)
         self.change_plot_status = pn.pane.Markdown("", visible=False)
         self.change_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=480, visible=False)
         self.last_change_fig = None
 
         self.change_plot_controls_row = pn.Row(self.change_t_a, self.change_t_b, self.change_cat_timing, visible=False)
-        self.change_plot_stat_row = pn.Row(pn.Column("Significance Test:", self.change_stat), pn.Column("Correction:", self.change_fdr), visible=False)
+        self.change_plot_stat_row = pn.Row(pn.Column("Significance Test:", self.change_stat), pn.Column("Correction:", self.change_fdr), pn.Column("Export:", self.change_svg_export), visible=False)
         self.change_plot_section = pn.Column(
             pn.layout.Divider(),
             pn.pane.Markdown("#### Timepoint Change Sub-Plot"),
@@ -140,6 +141,7 @@ class TimeSeriesController:
         self.change_cat_timing.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_stat.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_fdr.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_svg_export.param.watch(lambda *_: self._render_change_plot(), 'value')
         
         self.section = pn.Column(
             pn.pane.Markdown("## Time Series Plot\nUpload standalone files, or let the session automatically bridge generated data here."),
@@ -752,6 +754,7 @@ class TimeSeriesController:
         import math
         import common_plot
 
+        is_svg = bool(self.change_svg_export.value or self.svg_export.value)
         title_str = f"Change in {y_col} ({t_b} - {t_a}) by {color_col} (at {ref_t})"
         p_fig = figure(
             width=800, height=480,
@@ -759,7 +762,7 @@ class TimeSeriesController:
             x_axis_label=f"{color_col} (at {ref_t})",
             y_axis_label=f"Change in {y_col} ({t_b} - {t_a})",
             tools="pan,wheel_zoom,box_zoom,reset,save",
-            output_backend="svg" if self.svg_export.value else "canvas"
+            output_backend="svg" if is_svg else "canvas"
         )
 
         p_fig.xaxis.ticker = list(range(len(groups)))
@@ -846,6 +849,10 @@ class TimeSeriesController:
 
         self.last_change_fig = p_fig
         self.change_plot_pane.object = p_fig
+        save_tool = p_fig.select_one(SaveTool)
+        if save_tool:
+            prefix = getattr(self, "export_prefix", "CE_analysis")
+            save_tool.filename = f"{prefix}_{y_col}_change_{t_b}_minus_{t_a}".replace(' ', '_').replace('/', '_')
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
         apply_export_prefix_to_pane(self.change_plot_pane, prefix)
