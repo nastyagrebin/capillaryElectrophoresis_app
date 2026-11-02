@@ -3,7 +3,7 @@ import os
 import re
 import base64
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union, Sequence
 
 import numpy as np
 import pandas as pd
@@ -451,26 +451,68 @@ def compute_nmf_group_figures(
     }
 
 
-def attach_interactive_offset_slider(fig: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
-    """Attach a client-side Bokeh Slider to a multi-trace plot with CustomJS to interactively adjust vertical offset."""
-    if not hasattr(fig, "renderers"):
-        return fig
+def detach_bokeh_models(models: Union[bokeh.models.Model, Sequence[bokeh.models.Model], Dict[str, bokeh.models.Model]]):
+    """Safely detach Bokeh models and their references from any document so they can be embedded repeatedly."""
+    if isinstance(models, dict):
+        model_list = list(models.values())
+    elif isinstance(models, (list, tuple)):
+        model_list = list(models)
+    else:
+        model_list = [models]
+
+    for m in model_list:
+        if m is None:
+            continue
+        all_models = [m]
+        if hasattr(m, "references"):
+            all_models.extend(m.references())
+        for ref in all_models:
+            doc = getattr(ref, "document", None)
+            if doc is not None:
+                try:
+                    if ref in doc.roots:
+                        doc.remove_root(ref)
+                except Exception:
+                    pass
+                try:
+                    if hasattr(doc, "models") and ref.id in doc.models:
+                        del doc.models[ref.id]
+                except Exception:
+                    pass
+            ref._document = None
+            if hasattr(ref, "_temp_document"):
+                ref._temp_document = None
+
+
+def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
+    """Attach a client-side Bokeh Slider to a multi-trace plot or paired plots with CustomJS to interactively adjust vertical offset."""
+    if not isinstance(fig_or_layout, bokeh.models.LayoutDOM):
+        return fig_or_layout
+
+    if isinstance(fig_or_layout, bokeh.models.Plot):
+        target_plots = [fig_or_layout]
+    else:
+        target_plots = [m for m in fig_or_layout.references() if isinstance(m, bokeh.models.Plot)]
+
+    if not target_plots:
+        return fig_or_layout
 
     sources = []
-    idx = 0
-    for r in fig.renderers:
-        if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
-            if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
-                src = r.data_source
-                y_curr = np.array(src.data["y"], dtype=float)
-                y_base = y_curr + idx * initial_offset
-                src.data["y_base"] = y_base
-                src.data["sample_idx"] = [idx] * len(y_base)
-                sources.append(src)
-                idx += 1
+    for p in target_plots:
+        idx = 0
+        for r in p.renderers:
+            if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
+                if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
+                    src = r.data_source
+                    y_curr = np.array(src.data["y"], dtype=float)
+                    if "y_base" not in src.data or "sample_idx" not in src.data:
+                        src.data["y_base"] = y_curr + idx * initial_offset
+                        src.data["sample_idx"] = [idx] * len(y_curr)
+                    sources.append(src)
+                    idx += 1
 
     if not sources:
-        return fig
+        return fig_or_layout
 
     slider = bokeh.models.Slider(
         title="Interactive Vertical Offset",
@@ -495,7 +537,7 @@ def attach_interactive_offset_slider(fig: Any, initial_offset: float = 0.0, max_
         }
     """)
     slider.js_on_change("value", cb)
-    return bokeh.layouts.column(slider, fig, sizing_mode="stretch_width")
+    return bokeh.layouts.column(slider, fig_or_layout, sizing_mode="stretch_width")
 
 
 class HTMLReportController:
@@ -787,7 +829,7 @@ class HTMLReportController:
             {
                 "id": "preproc_despike",
                 "category": "Preprocessing",
-                "default_title": "Despiked Traces",
+                "default_title": "Despiked Electropherograms (Before and After)",
                 "getter": lambda offset=None: self._get_plot_despike(offset=offset),
                 "has_offset": True,
                 "get_offset": lambda: getattr(getattr(self.controllers.get("despike"), "preproc_offset", None), "value", 0.0),
@@ -796,7 +838,7 @@ class HTMLReportController:
             {
                 "id": "preproc_smooth",
                 "category": "Preprocessing",
-                "default_title": "Smoothed Traces",
+                "default_title": "Smoothed Electropherograms (Before and After)",
                 "getter": lambda offset=None: self._get_plot_smooth(offset=offset),
                 "has_offset": True,
                 "get_offset": lambda: getattr(getattr(self.controllers.get("smooth"), "preproc_offset", None), "value", 0.0),
@@ -805,7 +847,7 @@ class HTMLReportController:
             {
                 "id": "preproc_baseline",
                 "category": "Preprocessing",
-                "default_title": "Baseline-Subtracted Traces",
+                "default_title": "Baseline-Subtracted Electropherograms (Before and After)",
                 "getter": lambda offset=None: self._get_plot_baseline(offset=offset),
                 "has_offset": True,
                 "get_offset": lambda: getattr(getattr(self.controllers.get("baseline"), "preproc_offset", None), "value", 0.0),
@@ -815,9 +857,8 @@ class HTMLReportController:
                 "id": "preproc_norm_integration",
                 "category": "Preprocessing",
                 "default_title": "Peak Detection & Integration Preview",
-                "getter": lambda offset=None: self._get_plot_norm_integration(offset=offset),
-                "has_offset": True,
-                "get_offset": lambda: getattr(getattr(self.controllers.get("norm"), "preproc_offset", None), "value", 0.0),
+                "getter": lambda **kwargs: self._get_plot_norm_integration(),
+                "has_offset": False,
                 "default_selected": True
             },
             {
@@ -1131,57 +1172,78 @@ class HTMLReportController:
         ctrl = self.controllers.get("despike")
         if not ctrl:
             return None
+        inp = getattr(ctrl, "input_by_sample", None)
         out = getattr(ctrl, "output_by_sample", None)
         ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
         off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
-        if offset is not None and out:
-            return common_plot.plot_multi(out, "After: despiked", offset=off, asinh=ash)
 
-        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
-        if fig is None and out:
-            return common_plot.plot_multi(out, "After: despiked", offset=off, asinh=ash)
-        return fig
+        if inp:
+            p_before = common_plot.plot_multi(inp, "Before: original", offset=off, asinh=ash)
+            p_after = common_plot.plot_multi(out if out else inp, "After: despiked", offset=off, asinh=ash)
+            p_after.x_range = p_before.x_range
+            p_after.y_range = p_before.y_range
+            return bokeh.layouts.row(p_before, p_after, sizing_mode="stretch_width")
+
+        f_before = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
+        f_after = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if f_before and f_after:
+            f_after.x_range = f_before.x_range
+            f_after.y_range = f_before.y_range
+            return bokeh.layouts.row(f_before, f_after, sizing_mode="stretch_width")
+        return f_after or f_before
 
     def _get_plot_smooth(self, offset=None):
         ctrl = self.controllers.get("smooth")
         if not ctrl:
             return None
+        inp = getattr(ctrl, "input_by_sample", None)
         out = getattr(ctrl, "output_by_sample", None) or getattr(ctrl, "smoothed_by_sample", None)
         ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
         off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
-        if offset is not None and out:
-            return common_plot.plot_multi(out, "After smoothing", offset=off, asinh=ash)
 
-        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
-        if fig is None and out:
-            return common_plot.plot_multi(out, "After smoothing", offset=off, asinh=ash)
-        return fig
+        if inp:
+            p_before = common_plot.plot_multi(inp, "Before: original", offset=off, asinh=ash)
+            p_after = common_plot.plot_multi(out if out else inp, "After: smoothed", offset=off, asinh=ash)
+            p_after.x_range = p_before.x_range
+            p_after.y_range = p_before.y_range
+            return bokeh.layouts.row(p_before, p_after, sizing_mode="stretch_width")
+
+        f_before = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
+        f_after = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if f_before and f_after:
+            f_after.x_range = f_before.x_range
+            f_after.y_range = f_before.y_range
+            return bokeh.layouts.row(f_before, f_after, sizing_mode="stretch_width")
+        return f_after or f_before
 
     def _get_plot_baseline(self, offset=None):
         ctrl = self.controllers.get("baseline")
         if not ctrl:
             return None
+        inp = getattr(ctrl, "input_by_sample", None)
         out = getattr(ctrl, "output_by_sample", None)
         ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
         off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
-        if offset is not None and out:
-            return common_plot.plot_multi(out, "After: baseline-subtracted", offset=off, asinh=ash)
 
-        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
-        if fig is None and out:
-            return common_plot.plot_multi(out, "After: baseline-subtracted", offset=off, asinh=ash)
-        return fig
+        if inp:
+            p_before = common_plot.plot_multi(inp, "Before: original", offset=off, asinh=ash)
+            p_after = common_plot.plot_multi(out if out else inp, "After: baseline-subtracted", offset=off, asinh=ash)
+            p_after.x_range = p_before.x_range
+            p_after.y_range = p_before.y_range
+            return bokeh.layouts.row(p_before, p_after, sizing_mode="stretch_width")
 
-    def _get_plot_norm_integration(self, offset=None):
+        f_before = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
+        f_after = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if f_before and f_after:
+            f_after.x_range = f_before.x_range
+            f_after.y_range = f_before.y_range
+            return bokeh.layouts.row(f_before, f_after, sizing_mode="stretch_width")
+        return f_after or f_before
+
+    def _get_plot_norm_integration(self):
         ctrl = self.controllers.get("norm")
         if not ctrl:
             return None
-        if offset is not None and getattr(ctrl, "current_by_sample", None):
-            try:
-                ctrl.preproc_offset.value = offset
-                ctrl._render_before_fig()
-            except Exception:
-                pass
         fig = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
         if fig is None and getattr(ctrl, "current_by_sample", None):
             try:
@@ -1879,7 +1941,7 @@ class HTMLReportController:
                             })
                         else:
                             fig_to_use = res
-                            if item.get("has_offset") and hasattr(res, "renderers"):
+                            if item.get("has_offset") and isinstance(res, bokeh.models.LayoutDOM):
                                 max_off = 1.0 if pid == "preproc_norm" else 10.0
                                 step_off = 0.05 if pid == "preproc_norm" else 0.5
                                 off_val = offset_val if offset_val is not None else 0.0
@@ -1988,8 +2050,12 @@ class HTMLReportController:
         for sp in selected_sub_plots:
             figures_dict[f"sub_{sp['id']}"] = sp["figure"]
 
-        # Render Bokeh scripts and divs
-        script, divs = components(figures_dict) if figures_dict else ("", {})
+        # Render Bokeh scripts and divs safely with document detachment
+        detach_bokeh_models(figures_dict)
+        try:
+            script, divs = components(figures_dict) if figures_dict else ("", {})
+        finally:
+            detach_bokeh_models(figures_dict)
 
         # 5. Build Session Parameters Table
         params_html = ""
@@ -1998,11 +2064,53 @@ class HTMLReportController:
             params_html = "<div class='section-card' id='sec-params'>"
             params_html += "<h2 class='section-title'>Session Execution Parameters</h2>"
             params_html += "<div class='params-grid'>"
+
+            preproc_keys = [
+                "Preprocessing: Despike",
+                "Preprocessing: Smooth",
+                "Preprocessing: Baseline",
+                "Preprocessing: Normalization"
+            ]
+            preproc_items = {}
+            other_items = {}
+
             for stage, pdict in state.session_log.items():
+                if stage in preproc_keys or stage.lower().startswith("preprocessing") or "preproc" in stage.lower():
+                    preproc_items[stage] = pdict
+                else:
+                    other_items[stage] = pdict
+
+            # General information card first if present
+            if "General" in other_items:
+                params_html += f"<div class='param-card'><h4>General</h4><table class='param-table'>"
+                for k, v in other_items["General"].items():
+                    params_html += f"<tr><td class='param-key'>{k}</td><td class='param-val'>{v}</td></tr>"
+                params_html += "</table></div>"
+
+            # Consolidated Preprocessing card (all preprocessing steps in one box)
+            if preproc_items:
+                params_html += "<div class='param-card'><h4>Preprocessing</h4>"
+                params_html += "<div style='display: flex; flex-direction: column; gap: 12px;'>"
+                ordered_stages = [k for k in preproc_keys if k in preproc_items] + [k for k in preproc_items if k not in preproc_keys]
+                for stage in ordered_stages:
+                    pdict = preproc_items[stage]
+                    sub_title = stage.replace("Preprocessing:", "").replace("Preprocessing", "").strip(" :")
+                    params_html += f"<div><div style='font-weight: 600; color: #1e293b; font-size: 0.88rem; margin-bottom: 4px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 2px;'>{sub_title}</div>"
+                    params_html += "<table class='param-table'>"
+                    for k, v in pdict.items():
+                        params_html += f"<tr><td class='param-key'>{k}</td><td class='param-val'>{v}</td></tr>"
+                    params_html += "</table></div>"
+                params_html += "</div></div>"
+
+            # Remaining pipeline stages (Alignment, NMF, Alpha Diversity, etc.)
+            for stage, pdict in other_items.items():
+                if stage == "General":
+                    continue
                 params_html += f"<div class='param-card'><h4>{stage}</h4><table class='param-table'>"
                 for k, v in pdict.items():
                     params_html += f"<tr><td class='param-key'>{k}</td><td class='param-val'>{v}</td></tr>"
                 params_html += "</table></div>"
+
             params_html += "</div></div>"
 
         # 6. Group Standard Plots by Category
