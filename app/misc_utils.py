@@ -85,9 +85,16 @@ class MiscController:
         self.slice_apply_btn.on_click(self._apply_slicing)
 
         
+        self.html_plots = []
+        self.on_send_to_html = None
+
         # Continuous vs Continuous
         self.cvc_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cvc_btn.on_click(self._update_cvc)
+        self.cvc_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.cvc_send_btn.on_click(self._on_send_cvc_to_html)
+        self.cvc_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_cvc_fig = None
         self.cvc_x = pn.widgets.Select(name="X (Continuous)", options=[], width=150)
         self.cvc_y = pn.widgets.Select(name="Y (Continuous)", options=[], width=150)
         self.cvc_color = pn.widgets.Select(name="Color by", options=[], width=150)
@@ -101,6 +108,10 @@ class MiscController:
         # Categorical vs Continuous
         self.cat_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cat_btn.on_click(self._update_cat)
+        self.cat_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.cat_send_btn.on_click(self._on_send_cat_to_html)
+        self.cat_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_cat_fig = None
         self.cat_x = pn.widgets.Select(name="X (Categorical)", options=[], width=150)
         self.cat_y = pn.widgets.Select(name="Y (Continuous)", options=[], width=150)
         self.cat_stat = pn.widgets.RadioButtonGroup(name="Test", options=["mann-whitney", "kruskal-wallis"], value="kruskal-wallis")
@@ -111,6 +122,10 @@ class MiscController:
         # Regression Matrix
         self.reg_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.reg_btn.on_click(self._update_reg)
+        self.reg_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.reg_send_btn.on_click(self._on_send_reg_to_html)
+        self.reg_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_reg_fig = None
         self.reg_vars = pn.widgets.MultiChoice(name="Continuous variables to correlate", options=[], width=500)
         self.reg_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=850, height=600)
         self.reg_status = pn.pane.Markdown("")
@@ -118,6 +133,10 @@ class MiscController:
         # Categorical Covariance Matrix
         self.cat_cov_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cat_cov_btn.on_click(self._update_cat_cov)
+        self.cat_cov_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.cat_cov_send_btn.on_click(self._on_send_cat_cov_to_html)
+        self.cat_cov_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_cat_cov_fig = None
         self.cat_cov_vars = pn.widgets.MultiChoice(name="Categorical variables to correlate", options=[], width=500)
         self.cat_cov_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=850, height=600)
         self.cat_cov_status = pn.pane.Markdown("")
@@ -147,22 +166,22 @@ class MiscController:
             pn.Row(self.svg_export),
             pn.pane.Markdown("### Continuous vs Continuous"),
             pn.Row(self.cvc_x, self.cvc_y, self.cvc_color, pn.Column("Color mode:", self.cvc_color_mode)),
-            pn.Row(self.cvc_corr, self.cvc_reg, pn.Spacer(width=12), self.cvc_btn),
+            pn.Row(self.cvc_corr, self.cvc_reg, pn.Spacer(width=12), self.cvc_btn, self.cvc_send_btn, self.cvc_send_status),
             self.cvc_stats_pane,
             self.cvc_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Categorical vs Continuous"),
             pn.Row(self.cat_x, self.cat_y),
-            pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn),
+            pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn, self.cat_send_btn, self.cat_send_status),
             self.cat_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Regression Matrix (Continuous)"),
-            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_show_overlay, self.reg_btn),
+            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_show_overlay, self.reg_btn, self.reg_send_btn, self.reg_send_status),
             self.reg_status,
             self.reg_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Covariance Matrix (Categorical)"),
-            pn.Row(self.cat_cov_vars, pn.Spacer(width=12), self.cat_cov_show_overlay, self.cat_cov_btn),
+            pn.Row(self.cat_cov_vars, pn.Spacer(width=12), self.cat_cov_show_overlay, self.cat_cov_btn, self.cat_cov_send_btn, self.cat_cov_send_status),
             self.cat_cov_status,
             self.cat_cov_plot_pane,
             sizing_mode="stretch_width"
@@ -342,6 +361,9 @@ class MiscController:
 
     def _update_cvc(self, *_):
         self.cvc_plot_pane.object = None
+        self.last_cvc_fig = None
+        self.cvc_send_btn.disabled = True
+        self.cvc_send_status.object = ""
         df_source = self._get_df()
         if df_source is None or df_source.empty:
             self.cvc_stats_pane.object = "**Error: No data available.**"
@@ -456,6 +478,8 @@ class MiscController:
             reg_legend = Legend(items=[LegendItem(label=reg_label, renderers=[reg_renderer])], click_policy="hide")
             p_fig.add_layout(reg_legend, "below")
 
+        self.last_cvc_fig = p_fig
+        self.cvc_send_btn.disabled = False
         self.cvc_plot_pane.object = p_fig
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
@@ -463,6 +487,9 @@ class MiscController:
 
     def _update_cat(self, *_):
         self.cat_plot_pane.object = None
+        self.last_cat_fig = None
+        self.cat_send_btn.disabled = True
+        self.cat_send_status.object = ""
         df_source = self._get_df()
         if df_source is None or df_source.empty:
             return
@@ -554,6 +581,8 @@ class MiscController:
             p_fig.text(x=[(i1+i2)/2], y=[current_y], text=[ast], text_align="center", text_baseline="bottom")
             current_y += step
             
+        self.last_cat_fig = p_fig
+        self.cat_send_btn.disabled = False
         self.cat_plot_pane.object = p_fig
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
@@ -565,6 +594,9 @@ class MiscController:
         from scipy import stats
         import math
         
+        self.last_reg_fig = None
+        self.reg_send_btn.disabled = True
+        self.reg_send_status.object = ""
         df_source = self._get_df()
         if df_source is None or df_source.empty:
             self.reg_status.object = "**Error: No data available.**"
@@ -629,6 +661,8 @@ class MiscController:
         if self.svg_export.value:
             p.output_backend = "svg"
             
+        self.last_reg_fig = p
+        self.reg_send_btn.disabled = False
         self.reg_plot_pane.object = p
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
@@ -642,6 +676,9 @@ class MiscController:
         import scipy.stats as ss
         import math
         
+        self.last_cat_cov_fig = None
+        self.cat_cov_send_btn.disabled = True
+        self.cat_cov_send_status.object = ""
         def cramers_v_and_p(x, y):
             confusion_matrix = pd.crosstab(x, y)
             chi2, p_value, _, _ = ss.chi2_contingency(confusion_matrix)
@@ -723,11 +760,95 @@ class MiscController:
         if self.svg_export.value:
             p.output_backend = "svg"
             
+        self.last_cat_cov_fig = p
+        self.cat_cov_send_btn.disabled = False
         self.cat_cov_plot_pane.object = p
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
         apply_export_prefix_to_pane(self.cat_cov_plot_pane, prefix)
         self.cat_cov_status.object = ""
+
+    def _send_plot_to_html(self, entry: dict, status_pane: pn.pane.Markdown):
+        existing_idx = None
+        for i, p in enumerate(self.html_plots):
+            if p.get("id") == entry.get("id"):
+                existing_idx = i
+                break
+        if existing_idx is not None:
+            self.html_plots[existing_idx] = entry
+        else:
+            self.html_plots.append(entry)
+
+        status_pane.object = f"**Sent '{entry.get('title', 'plot')}' to HTML Report export.**"
+        if callable(self.on_send_to_html):
+            try:
+                self.on_send_to_html(entry)
+            except Exception as e:
+                print(f"[MiscController] Failed to send plot to HTML report controller: {e}")
+
+    def _on_send_cvc_to_html(self, _=None):
+        if self.last_cvc_fig is None:
+            return
+        import re
+        x_col = str(self.cvc_x.value or "X")
+        y_col = str(self.cvc_y.value or "Y")
+        safe_x = re.sub(r'[^a-zA-Z0-9_]', '_', x_col)
+        safe_y = re.sub(r'[^a-zA-Z0-9_]', '_', y_col)
+        title = f"CVC: {y_col} vs {x_col}"
+        entry = {
+            "id": f"misc_cvc_{safe_x}_{safe_y}",
+            "title": title,
+            "figure": self.last_cvc_fig,
+            "caption": f"Scatter plot of {y_col} vs {x_col}."
+        }
+        self._send_plot_to_html(entry, self.cvc_send_status)
+
+    def _on_send_cat_to_html(self, _=None):
+        if self.last_cat_fig is None:
+            return
+        import re
+        x_col = str(self.cat_x.value or "X")
+        y_col = str(self.cat_y.value or "Y")
+        safe_x = re.sub(r'[^a-zA-Z0-9_]', '_', x_col)
+        safe_y = re.sub(r'[^a-zA-Z0-9_]', '_', y_col)
+        title = f"Comparison: {y_col} by {x_col}"
+        entry = {
+            "id": f"misc_cat_{safe_x}_{safe_y}",
+            "title": title,
+            "figure": self.last_cat_fig,
+            "caption": f"Categorical comparison of {y_col} grouped by {x_col}."
+        }
+        self._send_plot_to_html(entry, self.cat_send_status)
+
+    def _on_send_reg_to_html(self, _=None):
+        if self.last_reg_fig is None:
+            return
+        import re
+        vars_list = [re.sub(r'[^a-zA-Z0-9_]', '_', str(v)) for v in (self.reg_vars.value or [])]
+        vars_tag = "_".join(vars_list[:4]) if vars_list else "all"
+        title = "Regression Matrix (Continuous)"
+        entry = {
+            "id": f"misc_reg_{vars_tag}",
+            "title": title,
+            "figure": self.last_reg_fig,
+            "caption": "Linear regression correlation matrix among continuous variables."
+        }
+        self._send_plot_to_html(entry, self.reg_send_status)
+
+    def _on_send_cat_cov_to_html(self, _=None):
+        if self.last_cat_cov_fig is None:
+            return
+        import re
+        vars_list = [re.sub(r'[^a-zA-Z0-9_]', '_', str(v)) for v in (self.cat_cov_vars.value or [])]
+        vars_tag = "_".join(vars_list[:4]) if vars_list else "all"
+        title = "Categorical Covariance Matrix (Cramér's V)"
+        entry = {
+            "id": f"misc_cat_cov_{vars_tag}",
+            "title": title,
+            "figure": self.last_cat_cov_fig,
+            "caption": "Categorical covariance matrix using Cramér's V."
+        }
+        self._send_plot_to_html(entry, self.cat_cov_send_status)
 
 def build_misc_section():
 

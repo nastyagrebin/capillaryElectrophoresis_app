@@ -1282,6 +1282,7 @@ html_controllers = {
     "timeseries": timeseries_ctrl,
 }
 html_report_section, html_report_ctrl = build_html_report_section(html_controllers)
+misc_ctrl.on_send_to_html = html_report_ctrl.add_misc_plot
 
 TABS = pn.Tabs(
     ("Upload", upload_tab),
