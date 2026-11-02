@@ -726,10 +726,10 @@ class HTMLReportController:
                 "default_selected": True
             },
             {
-                "id": "snr_plot",
+                "id": "snr_data",
                 "category": "Raw Data & QC",
                 "default_title": "Signal-to-Noise Ratio (SNR)",
-                "getter": lambda: self._get_plot_snr(),
+                "getter": lambda: self._get_snr_data(),
                 "default_selected": True
             },
             # Preprocessing
@@ -916,9 +916,118 @@ class HTMLReportController:
             fig = extract_bokeh_figure(getattr(state, "control_plot_pane", None))
         return fig
 
+    def _get_snr_data(self):
+        ctrl = self.controllers.get("snr")
+        if not ctrl:
+            return None
+        res_df = getattr(ctrl, "results_df", None)
+        if res_df is None or (hasattr(res_df, "empty") and res_df.empty):
+            return None
+        return {
+            "type": "snr_table",
+            "results_df": res_df,
+            "signal_range": getattr(ctrl, "signal_range", None),
+            "noise_range": getattr(ctrl, "noise_range", None),
+            "excluded_samples": list(getattr(getattr(ctrl, "exclude_group", None), "value", [])),
+        }
+
     def _get_plot_snr(self):
         ctrl = self.controllers.get("snr")
         return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+
+    def _format_snr_html(self, snr_data: Dict[str, Any]) -> str:
+        sig_range = snr_data.get("signal_range")
+        noi_range = snr_data.get("noise_range")
+        excluded = snr_data.get("excluded_samples", [])
+        df = snr_data.get("results_df")
+
+        sig_text = f"{sig_range[0]:.3f} &ndash; {sig_range[1]:.3f} min" if sig_range else "Not specified"
+        noi_text = f"{noi_range[0]:.3f} &ndash; {noi_range[1]:.3f} min" if noi_range else "Not specified"
+
+        regions_html = f"""
+        <div style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 220px;">
+                <div style="font-size: 0.8rem; color: #1e40af; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Chosen Signal Region (Peak S)</div>
+                <div style="font-size: 1.15rem; color: #1e3a8a; font-weight: 700;">{sig_text}</div>
+                <div style="font-size: 0.8rem; color: #3b82f6; margin-top: 4px;">Tallest peak height S extracted per sample within this window</div>
+            </div>
+            <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 220px;">
+                <div style="font-size: 0.8rem; color: #475569; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Chosen Noise Region (Baseline B, std &sigma;<sub>B</sub>)</div>
+                <div style="font-size: 1.15rem; color: #334155; font-weight: 700;">{noi_text}</div>
+                <div style="font-size: 0.8rem; color: #64748b; margin-top: 4px;">Mean intensity B and baseline standard deviation &sigma;<sub>B</sub> extracted from this window</div>
+            </div>
+        </div>
+        """
+
+        excluded_html = ""
+        if excluded:
+            ex_str = ", ".join(str(s) for s in excluded)
+            excluded_html = f"""
+            <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 10px 14px; margin-bottom: 16px; font-size: 0.85rem; color: #92400e;">
+                <strong>Excluded Samples ({len(excluded)}):</strong> {ex_str}
+            </div>
+            """
+
+        table_html = ""
+        if df is not None and not df.empty:
+            table_df = df.reset_index() if "Sample" not in df.columns else df.copy()
+
+            col_map = {
+                "Sample": "Sample",
+                "S": "Signal Peak (S)",
+                "B": "Noise Mean (B)",
+                "sigma_B": "Noise Std (&sigma;<sub>B</sub>)",
+                "SNR": "Signal-to-Noise Ratio (SNR)"
+            }
+            cols = [c for c in ["Sample", "S", "B", "sigma_B", "SNR"] if c in table_df.columns]
+            if not cols:
+                cols = list(table_df.columns)
+
+            th_cells = []
+            for c in cols:
+                align = "left" if c == "Sample" else "right"
+                label = col_map.get(c, c)
+                th_cells.append(f"<th style='padding: 10px 14px; font-weight: 600; text-align: {align}; border-bottom: 2px solid #cbd5e1; background: #f8fafc; color: #334155;'>{label}</th>")
+            thead_html = f"<thead style='position: sticky; top: 0; z-index: 1;'><tr>{''.join(th_cells)}</tr></thead>"
+
+            tr_rows = []
+            for idx, row in table_df.iterrows():
+                td_cells = []
+                bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
+                for c in cols:
+                    val = row[c]
+                    align = "left" if c == "Sample" else "right"
+                    if c == "Sample":
+                        val_str = str(val)
+                        bold_style = "font-weight: 600; color: #1e293b;"
+                    elif pd.isna(val) or (isinstance(val, float) and np.isinf(val)):
+                        val_str = "N/A"
+                        bold_style = "color: #94a3b8;"
+                    elif c == "SNR":
+                        val_str = f"{float(val):.2f}"
+                        bold_style = "font-weight: 700; color: #0f766e;"
+                    else:
+                        val_str = f"{float(val):.4f}"
+                        bold_style = "color: #334155;"
+                    td_cells.append(f"<td style='padding: 8px 14px; text-align: {align}; border-bottom: 1px solid #e2e8f0; {bold_style}'>{val_str}</td>")
+                tr_rows.append(f"<tr style='background: {bg};'>{''.join(td_cells)}</tr>")
+            tbody_html = f"<tbody>{''.join(tr_rows)}</tbody>"
+
+            table_html = f"""
+            <div style="overflow-x: auto; max-height: 480px; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.03);">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.88rem; font-family: inherit;">
+                    {thead_html}
+                    {tbody_html}
+                </table>
+            </div>
+            <div style="margin-top: 8px; font-size: 0.8rem; color: #64748b; font-style: italic;">
+                SNR calculation formula: (S &minus; B) / &sigma;<sub>B</sub>
+            </div>
+            """
+        else:
+            table_html = "<p style='color: #64748b; font-style: italic;'>No SNR results data table available.</p>"
+
+        return f"<div class='snr-report-block'>{regions_html}{excluded_html}{table_html}</div>"
 
     def _get_plot_despike(self):
         ctrl = self.controllers.get("despike")
@@ -1548,15 +1657,25 @@ class HTMLReportController:
                 w = self._standard_plot_widgets[pid]
                 if w["checkbox"].value and w["is_ready"]:
                     user_title = w["title_input"].value or item["default_title"]
-                    fig = w["getter"]()
-                    if fig is not None:
-                        selected_standard_plots.append({
-                            "id": pid,
-                            "category": item["category"],
-                            "title": user_title,
-                            "figure": fig,
-                            "caption": ""
-                        })
+                    res = w["getter"]()
+                    if res is not None:
+                        if isinstance(res, dict) and res.get("type") == "snr_table":
+                            selected_standard_plots.append({
+                                "id": pid,
+                                "category": item["category"],
+                                "title": user_title,
+                                "snr_data": res,
+                                "figure": None,
+                                "caption": ""
+                            })
+                        else:
+                            selected_standard_plots.append({
+                                "id": pid,
+                                "category": item["category"],
+                                "title": user_title,
+                                "figure": res,
+                                "caption": ""
+                            })
 
         # 2. Collect nested NMF Group Statistics
         selected_nmf_groups = []
@@ -1633,7 +1752,8 @@ class HTMLReportController:
 
         # Standard plots
         for sp in selected_standard_plots:
-            figures_dict[f"std_{sp['id']}"] = sp["figure"]
+            if sp.get("figure") is not None:
+                figures_dict[f"std_{sp['id']}"] = sp["figure"]
 
         # Nested NMF group plots
         for g_idx, grp in enumerate(selected_nmf_groups):
@@ -1653,7 +1773,7 @@ class HTMLReportController:
             figures_dict[f"sub_{sp['id']}"] = sp["figure"]
 
         # Render Bokeh scripts and divs
-        script, divs = components(figures_dict)
+        script, divs = components(figures_dict) if figures_dict else ("", {})
 
         # 5. Build Session Parameters Table
         params_html = ""
@@ -1692,12 +1812,21 @@ class HTMLReportController:
             sec_html += f"<h2 class='section-title'>{cat_name}</h2>"
 
             for it in items:
-                plot_key = f"std_{it['id']}"
-                div_html = divs.get(plot_key, "")
                 card_id = f"card-{it['id']}"
                 sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
 
-                sec_html += f"""
+                if it.get("snr_data"):
+                    snr_content = self._format_snr_html(it["snr_data"])
+                    sec_html += f"""
+                <div class="plot-card" id="{card_id}">
+                    <h3 class="plot-title">{it['title']}</h3>
+                    {snr_content}
+                </div>
+                """
+                else:
+                    plot_key = f"std_{it['id']}"
+                    div_html = divs.get(plot_key, "")
+                    sec_html += f"""
                 <div class="plot-card" id="{card_id}">
                     <h3 class="plot-title">{it['title']}</h3>
                     <div class="plot-container">{div_html}</div>
@@ -2120,6 +2249,7 @@ class HTMLReportController:
     .toc-container {{ display: none; }}
     .section-card {{ box-shadow: none; border: none; padding: 0; margin-bottom: 20px; }}
     .plot-card {{ page-break-inside: avoid; break-inside: avoid; margin-bottom: 24px; box-shadow: none; }}
+    .snr-report-block div {{ max-height: none !important; overflow: visible !important; }}
   }}
 </style>
 </head>
