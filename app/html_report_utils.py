@@ -661,6 +661,59 @@ class HTMLReportController:
         self.add_basis_btn = pn.widgets.Button(name="Add Basis Waveform", button_type="success", width=170)
         self.add_basis_btn.on_click(self._on_add_basis_plot)
 
+        # 4C: Alpha Diversity Peak Detection Sub-Plot
+        self.alpha_peak_sample_select = pn.widgets.Select(name="Select Sample", options=[], width=260)
+        self.alpha_peak_asinh = pn.widgets.Checkbox(name="Use asinh transform", value=True)
+        self.alpha_peak_title = pn.widgets.TextInput(name="Plot Title", value="Sample Peak Detection", width=260)
+        self.alpha_peak_caption = pn.widgets.TextInput(name="Optional Caption", value="", width=300)
+        self.add_alpha_peak_btn = pn.widgets.Button(name="Add Peak Detection Plot", button_type="success", width=210)
+        self.add_alpha_peak_btn.on_click(self._on_add_alpha_peak_plot)
+        self.alpha_peak_sample_select.param.watch(
+            lambda e: setattr(self.alpha_peak_title, "value", f"Peak Detection: {e.new}" if e.new else "Sample Peak Detection"), "value"
+        )
+
+        # 4D: Dimensionality Reduction Custom Plots (PCA, PLS-DA, MDS, t-SNE)
+        self.viz_plot_method = pn.widgets.Select(name="Method", options=["PCA", "PLS-DA", "MDS", "t-SNE"], value="PCA", width=130)
+        self.viz_color_source = pn.widgets.Select(name="Color Source", options=["Metadata Variable", "Diversity Metric"], value="Metadata Variable", width=160)
+        self.viz_color_var = pn.widgets.Select(name="Color By Variable / Metric", options=[], width=220)
+        self.viz_color_mode = pn.widgets.RadioButtonGroup(name="Value Type", options=["Categorical", "Continuous"], value="Categorical")
+
+        self.viz_pca_x = pn.widgets.IntInput(name="PC X (1-based)", value=1, start=1, end=50, width=110)
+        self.viz_pca_y = pn.widgets.IntInput(name="PC Y (1-based)", value=2, start=1, end=50, width=110)
+        self.viz_pls_x = pn.widgets.IntInput(name="LV X (1-based)", value=1, start=1, end=10, width=110, visible=False)
+        self.viz_pls_y = pn.widgets.IntInput(name="LV Y (1-based)", value=2, start=1, end=10, width=110, visible=False)
+        self.viz_mds_metric = pn.widgets.Select(name="MDS Metric", options=["euclidean", "cosine", "correlation", "cityblock", "braycurtis"], value="euclidean", width=140, visible=False)
+        self.viz_tsne_metric = pn.widgets.Select(name="t-SNE Metric", options=["cosine", "euclidean", "correlation", "cityblock"], value="cosine", width=140, visible=False)
+        self.viz_tsne_perp = pn.widgets.FloatInput(name="Perplexity", value=30.0, start=1.0, width=110, visible=False)
+
+        self.viz_plot_title = pn.widgets.TextInput(name="Plot Title", value="PCA Score Plot (PC1 vs PC2)", width=280)
+        self.viz_plot_caption = pn.widgets.TextInput(name="Optional Caption", value="", width=300)
+        self.add_viz_plot_btn = pn.widgets.Button(name="Add Dimensionality Reduction Plot", button_type="success", width=250)
+        self.add_viz_plot_btn.on_click(self._on_add_viz_plot)
+
+        def _update_viz_method_controls(event):
+            m = event.new
+            self.viz_pca_x.visible = (m == "PCA")
+            self.viz_pca_y.visible = (m == "PCA")
+            self.viz_pls_x.visible = (m == "PLS-DA")
+            self.viz_pls_y.visible = (m == "PLS-DA")
+            self.viz_mds_metric.visible = (m == "MDS")
+            self.viz_tsne_metric.visible = (m == "t-SNE")
+            self.viz_tsne_perp.visible = (m == "t-SNE")
+            if m == "PLS-DA":
+                self.viz_color_mode.value = "Categorical"
+            self._auto_update_viz_title()
+
+        self.viz_plot_method.param.watch(_update_viz_method_controls, "value")
+        self.viz_pca_x.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_pca_y.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_pls_x.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_pls_y.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_mds_metric.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_tsne_metric.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_color_var.param.watch(lambda _: self._auto_update_viz_title(), "value")
+        self.viz_color_source.param.watch(lambda _: self._update_viz_color_options(), "value")
+
         self.additional_plots_container = pn.Column(
             pn.pane.Markdown("*No additional sub-plots added yet.*"),
             sizing_mode="stretch_width"
@@ -759,6 +812,17 @@ class HTMLReportController:
                     pn.Row(self.basis_select, self.basis_plot_type),
                     pn.Row(self.basis_title, self.basis_caption),
                     self.add_basis_btn
+                )),
+                ("Alpha Diversity Peak Detection", pn.Column(
+                    pn.Row(self.alpha_peak_sample_select, self.alpha_peak_asinh),
+                    pn.Row(self.alpha_peak_title, self.alpha_peak_caption),
+                    self.add_alpha_peak_btn
+                )),
+                ("Dimensionality Reduction", pn.Column(
+                    pn.Row(self.viz_plot_method, self.viz_color_source, self.viz_color_var, self.viz_color_mode),
+                    pn.Row(self.viz_pca_x, self.viz_pca_y, self.viz_pls_x, self.viz_pls_y, self.viz_mds_metric, self.viz_tsne_metric, self.viz_tsne_perp),
+                    pn.Row(self.viz_plot_title, self.viz_plot_caption),
+                    self.add_viz_plot_btn
                 )),
             ),
             pn.pane.Markdown("**Current Additional Sub-Plots:**", styles={"margin-top": "10px"}),
@@ -920,10 +984,10 @@ class HTMLReportController:
             },
             # Alpha Diversity
             {
-                "id": "alpha_diversity",
+                "id": "alpha_div_table",
                 "category": "Alpha Diversity",
-                "default_title": "Alpha Diversity Metrics Comparison",
-                "getter": lambda: self._get_plot_diversity(),
+                "default_title": "Alpha Diversity Metrics Table",
+                "getter": lambda: self._get_alpha_div_table(),
                 "default_selected": True
             },
             # Dimensionality Reduction
@@ -935,32 +999,11 @@ class HTMLReportController:
                 "default_selected": True
             },
             {
-                "id": "viz_pca",
+                "id": "viz_loadings_pc1_3",
                 "category": "Dimensionality Reduction",
-                "default_title": "PCA Score Plot",
-                "getter": lambda: self._get_plot_viz_pca(),
+                "default_title": "PCA Loadings for First 3 PCs (PC1, PC2, PC3)",
+                "getter": lambda: self._get_plot_viz_pc_loadings_1_3(),
                 "default_selected": True
-            },
-            {
-                "id": "viz_loadings",
-                "category": "Dimensionality Reduction",
-                "default_title": "PCA Loadings Plot",
-                "getter": lambda: self._get_plot_viz_loadings(),
-                "default_selected": False
-            },
-            {
-                "id": "viz_mds",
-                "category": "Dimensionality Reduction",
-                "default_title": "Metric MDS 2D Embedding",
-                "getter": lambda: self._get_plot_viz_mds(),
-                "default_selected": False
-            },
-            {
-                "id": "viz_tsne",
-                "category": "Dimensionality Reduction",
-                "default_title": "t-SNE 2D Embedding",
-                "getter": lambda: self._get_plot_viz_tsne(),
-                "default_selected": False
             },
             # Miscellaneous
             {
@@ -1396,6 +1439,111 @@ class HTMLReportController:
                 return p
         return None
 
+    def _get_alpha_div_table(self):
+        ctrl = self.controllers.get("diversity")
+        if not ctrl:
+            return None
+        df = getattr(ctrl, "metrics_df", None)
+        if df is None or (hasattr(df, "empty") and df.empty):
+            tab_val = getattr(getattr(ctrl, "table", None), "value", None)
+            if isinstance(tab_val, pd.DataFrame) and not tab_val.empty:
+                df = tab_val
+        if df is None or (hasattr(df, "empty") and df.empty):
+            return None
+        return {
+            "type": "alpha_table",
+            "metrics_df": df.copy(),
+        }
+
+    def _format_alpha_div_table_html(self, alpha_data: Dict[str, Any]) -> str:
+        df = alpha_data.get("metrics_df")
+        if df is None or df.empty:
+            return "<p style='color: #64748b; font-style: italic;'>No alpha diversity metrics available.</p>"
+
+        table_df = df.reset_index() if "sample" not in df.columns and "Sample" not in df.columns else df.copy()
+        if "sample" in table_df.columns:
+            table_df = table_df.rename(columns={"sample": "Sample"})
+        elif "index" in table_df.columns:
+            table_df = table_df.rename(columns={"index": "Sample"})
+
+        n_samples = len(table_df)
+        metric_cols = [c for c in table_df.columns if c != "Sample"]
+
+        summary_header = f"""
+        <div style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 220px;">
+                <div style="font-size: 0.8rem; color: #166534; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Alpha Diversity Cultures / Samples</div>
+                <div style="font-size: 1.15rem; color: #14532d; font-weight: 700;">{n_samples} Samples</div>
+                <div style="font-size: 0.8rem; color: #22c55e; margin-top: 4px;">{len(metric_cols)} diversity indices evaluated per sample</div>
+            </div>
+        </div>
+        """
+
+        col_labels = {
+            "Sample": "Sample",
+            "richness": "Richness (S)",
+            "shannon": "Shannon (H')",
+            "shannon_effective": "Shannon Effective",
+            "simpson_D": "Simpson (D)",
+            "gini_simpson": "Gini-Simpson (1-D)",
+            "pielou_evenness": "Pielou Evenness (J)",
+            "hill_q0": "Hill q0",
+            "hill_q1": "Hill q1",
+            "hill_q2": "Hill q2",
+            "total_auc": "Total AUC",
+            "roi_auc": "ROI AUC"
+        }
+
+        cols = ["Sample"] + metric_cols
+        th_cells = []
+        for c in cols:
+            align = "left" if c == "Sample" else "right"
+            label = col_labels.get(c, c)
+            th_cells.append(f"<th style='padding: 10px 14px; font-weight: 600; text-align: {align}; border-bottom: 2px solid #cbd5e1; background: #f8fafc; color: #334155; white-space: nowrap;'>{label}</th>")
+        thead_html = f"<thead style='position: sticky; top: 0; z-index: 1;'><tr>{''.join(th_cells)}</tr></thead>"
+
+        tr_rows = []
+        for idx, row in table_df.iterrows():
+            td_cells = []
+            bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
+            for c in cols:
+                val = row[c]
+                align = "left" if c == "Sample" else "right"
+                if c == "Sample":
+                    val_str = str(val)
+                    bold_style = "font-weight: 600; color: #1e293b;"
+                elif pd.isna(val) or (isinstance(val, float) and np.isinf(val)):
+                    val_str = "N/A"
+                    bold_style = "color: #94a3b8;"
+                elif isinstance(val, (int, np.integer)):
+                    val_str = f"{val}"
+                    bold_style = "color: #334155;"
+                elif isinstance(val, (float, np.floating)):
+                    if c in ["richness", "hill_q0"]:
+                        val_str = f"{val:.0f}"
+                    elif abs(val) >= 1000 or (abs(val) < 0.001 and val != 0):
+                        val_str = f"{val:.3e}"
+                    else:
+                        val_str = f"{val:.4f}"
+                    bold_style = "color: #334155;"
+                else:
+                    val_str = str(val)
+                    bold_style = "color: #334155;"
+                td_cells.append(f"<td style='padding: 8px 14px; text-align: {align}; {bold_style} border-bottom: 1px solid #e2e8f0; white-space: nowrap;'>{val_str}</td>")
+            tr_rows.append(f"<tr style='background: {bg};'>{''.join(td_cells)}</tr>")
+        tbody_html = f"<tbody>{''.join(tr_rows)}</tbody>"
+
+        table_content = f"""
+        {summary_header}
+        <div style="overflow-x: auto; max-height: 480px; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 16px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                {thead_html}
+                {tbody_html}
+            </table>
+        </div>
+        """
+        return table_content
+
     def _get_plot_diversity(self):
         ctrl = self.controllers.get("diversity")
         if not ctrl:
@@ -1407,23 +1555,95 @@ class HTMLReportController:
 
     def _get_plot_viz_scree(self):
         ctrl = self.controllers.get("viz")
-        return extract_bokeh_figure(getattr(ctrl, "scree_plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        fig = extract_bokeh_figure(getattr(ctrl, "pca_scree_pane", None))
+        if fig is not None:
+            return fig
+        fig = extract_bokeh_figure(getattr(ctrl, "scree_plot_pane", None))
+        if fig is not None:
+            return fig
+        pca = getattr(ctrl, "last_pca", None)
+        if pca is None and hasattr(ctrl, "H_df") and ctrl.H_df is not None and not ctrl.H_df.empty:
+            try:
+                import CEtools as cet
+                from sklearn.decomposition import PCA
+                valid_samples = ctrl._get_valid_samples() if hasattr(ctrl, "_get_valid_samples") else ctrl.H_df.index
+                H_sub = ctrl.H_df.loc[ctrl.H_df.index.isin(valid_samples)].copy()
+                if not H_sub.empty:
+                    X = cet.prepare_features(H_sub, row_norm="l1", zscore_cols=True)
+                    n_comp = min(X.shape[0], X.shape[1], 10)
+                    if n_comp >= 1:
+                        pca = PCA(n_components=n_comp, random_state=0)
+                        pca.fit(X)
+                        ctrl.last_pca = pca
+            except Exception:
+                pca = None
+        if pca is not None:
+            try:
+                from CEtools import pca_viz as pv
+                return pv.plot_pca_scree_bokeh(pca)
+            except Exception:
+                pass
+        return None
+
+    def _get_plot_viz_pc_loadings_1_3(self):
+        ctrl = self.controllers.get("viz")
+        if not ctrl:
+            return None
+        pca = getattr(ctrl, "last_pca", None)
+        if pca is None and hasattr(ctrl, "H_df") and ctrl.H_df is not None and not ctrl.H_df.empty:
+            try:
+                import CEtools as cet
+                from sklearn.decomposition import PCA
+                valid_samples = ctrl._get_valid_samples() if hasattr(ctrl, "_get_valid_samples") else ctrl.H_df.index
+                H_sub = ctrl.H_df.loc[ctrl.H_df.index.isin(valid_samples)].copy()
+                if not H_sub.empty:
+                    X = cet.prepare_features(H_sub, row_norm="l1", zscore_cols=True)
+                    n_comp = min(X.shape[0], X.shape[1], 10)
+                    if n_comp >= 1:
+                        pca = PCA(n_components=n_comp, random_state=0)
+                        pca.fit(X)
+                        ctrl.last_pca = pca
+            except Exception:
+                pca = None
+        if pca is None:
+            return None
+        try:
+            from CEtools import pca_viz as pv
+            from bokeh.layouts import column
+            figs = []
+            W = np.asarray(pca.components_, dtype=float)
+            n_pcs = min(3, W.shape[0])
+            for pc in range(1, n_pcs + 1):
+                _, p = pv.plot_pc_loadings_bar_bokeh(pca, pc=pc, kind="line", height=220, width=800)
+                p.sizing_mode = "stretch_width"
+                figs.append(p)
+            if figs:
+                return column(children=figs, sizing_mode="stretch_width")
+        except Exception:
+            return None
+        return None
 
     def _get_plot_viz_pca(self):
         ctrl = self.controllers.get("viz")
-        return extract_bokeh_figure(getattr(ctrl, "pca_plot_pane", None)) if ctrl else None
+        fig = extract_bokeh_figure(getattr(ctrl, "pca_pane", None))
+        return fig if fig is not None else (extract_bokeh_figure(getattr(ctrl, "pca_plot_pane", None)) if ctrl else None)
 
     def _get_plot_viz_loadings(self):
         ctrl = self.controllers.get("viz")
-        return extract_bokeh_figure(getattr(ctrl, "loadings_plot_pane", None)) if ctrl else None
+        fig = extract_bokeh_figure(getattr(ctrl, "pc_loadings_pane", None))
+        return fig if fig is not None else (extract_bokeh_figure(getattr(ctrl, "loadings_plot_pane", None)) if ctrl else None)
 
     def _get_plot_viz_mds(self):
         ctrl = self.controllers.get("viz")
-        return extract_bokeh_figure(getattr(ctrl, "mds_plot_pane", None)) if ctrl else None
+        fig = extract_bokeh_figure(getattr(ctrl, "mds_pane", None))
+        return fig if fig is not None else (extract_bokeh_figure(getattr(ctrl, "mds_plot_pane", None)) if ctrl else None)
 
     def _get_plot_viz_tsne(self):
         ctrl = self.controllers.get("viz")
-        return extract_bokeh_figure(getattr(ctrl, "tsne_plot_pane", None)) if ctrl else None
+        fig = extract_bokeh_figure(getattr(ctrl, "tsne_pane", None))
+        return fig if fig is not None else (extract_bokeh_figure(getattr(ctrl, "tsne_plot_pane", None)) if ctrl else None)
 
     def _get_plot_misc_cvc(self):
         ctrl = self.controllers.get("misc")
@@ -1483,6 +1703,8 @@ class HTMLReportController:
             t = getattr(getattr(viz_ctrl, "meta_table", None), "value", None)
             if t is not None and not t.empty:
                 metadata_df = t.copy()
+            elif hasattr(viz_ctrl, "metadata_df") and viz_ctrl.metadata_df is not None and not viz_ctrl.metadata_df.empty:
+                metadata_df = viz_ctrl.metadata_df.copy()
         if (metadata_df is None or metadata_df.empty) and timeseries_ctrl:
             t = getattr(timeseries_ctrl, "meta_df", None)
             if t is not None and not t.empty:
@@ -1630,9 +1852,10 @@ class HTMLReportController:
                 data["checkbox"].value = select
 
     def _update_dropdowns(self):
-        """Populate sample reconstruction and basis selection dropdowns."""
+        """Populate sample reconstruction, basis selection, and peak detection dropdowns."""
         state = self.controllers.get("state")
         nmf_ctrl = self.controllers.get("nmf")
+        div_ctrl = self.controllers.get("diversity")
 
         samples: List[str] = []
         if state and hasattr(state, "current_by_sample") and state.current_by_sample:
@@ -1647,6 +1870,19 @@ class HTMLReportController:
             if not self.sample_recon_select.value or self.sample_recon_select.value not in samples:
                 self.sample_recon_select.value = samples[0]
 
+        div_samples: List[str] = []
+        if div_ctrl and hasattr(div_ctrl, "sample_peaks_all") and div_ctrl.sample_peaks_all:
+            div_samples = list(div_ctrl.sample_peaks_all.keys())
+        elif div_ctrl and hasattr(div_ctrl, "samples") and div_ctrl.samples:
+            div_samples = list(div_ctrl.samples)
+        elif samples:
+            div_samples = samples
+
+        if div_samples:
+            self.alpha_peak_sample_select.options = div_samples
+            if not self.alpha_peak_sample_select.value or self.alpha_peak_sample_select.value not in div_samples:
+                self.alpha_peak_sample_select.value = div_samples[0]
+
         bases: List[str] = []
         if nmf_ctrl and hasattr(nmf_ctrl, "H_df") and nmf_ctrl.H_df is not None and not nmf_ctrl.H_df.empty:
             df = nmf_ctrl.H_df
@@ -1658,6 +1894,58 @@ class HTMLReportController:
             self.basis_select.options = bases
             if not self.basis_select.value or self.basis_select.value not in bases:
                 self.basis_select.value = bases[0]
+
+        self._update_viz_color_options()
+
+    def _auto_update_viz_title(self):
+        m = getattr(self.viz_plot_method, "value", "PCA")
+        cvar = getattr(self.viz_color_var, "value", "") or ""
+        c_suffix = f" colored by {cvar}" if cvar else ""
+        if m == "PCA":
+            x_val = getattr(self.viz_pca_x, "value", 1)
+            y_val = getattr(self.viz_pca_y, "value", 2)
+            self.viz_plot_title.value = f"PCA Score Plot (PC{x_val} vs PC{y_val}){c_suffix}"
+        elif m == "PLS-DA":
+            x_val = getattr(self.viz_pls_x, "value", 1)
+            y_val = getattr(self.viz_pls_y, "value", 2)
+            self.viz_plot_title.value = f"PLS-DA Score Plot (LV{x_val} vs LV{y_val}){c_suffix}"
+        elif m == "MDS":
+            metric = getattr(self.viz_mds_metric, "value", "euclidean")
+            self.viz_plot_title.value = f"MDS 2D Embedding (metric={metric}){c_suffix}"
+        elif m == "t-SNE":
+            metric = getattr(self.viz_tsne_metric, "value", "cosine")
+            self.viz_plot_title.value = f"t-SNE 2D Embedding (metric={metric}){c_suffix}"
+
+    def _update_viz_color_options(self):
+        source = getattr(self.viz_color_source, "value", "Metadata Variable")
+        _, metadata_df, sample_col, _ = self._get_nmf_and_meta_data()
+        div_ctrl = self.controllers.get("diversity")
+        viz_ctrl = self.controllers.get("viz")
+
+        if source == "Metadata Variable":
+            opts = []
+            if metadata_df is not None and not metadata_df.empty:
+                opts = [c for c in metadata_df.columns if c not in [sample_col, "_sid", "Unnamed: 0"]]
+            elif viz_ctrl and hasattr(viz_ctrl, "metadata_df") and viz_ctrl.metadata_df is not None:
+                opts = [c for c in viz_ctrl.metadata_df.columns if c not in ["sample", "_sid", "Unnamed: 0"]]
+            self.viz_color_var.options = opts
+            if opts and (not self.viz_color_var.value or self.viz_color_var.value not in opts):
+                self.viz_color_var.value = opts[0]
+            if getattr(self.viz_plot_method, "value", "PCA") != "PLS-DA":
+                self.viz_color_mode.value = "Categorical"
+        else:
+            div_df = getattr(div_ctrl, "metrics_df", None)
+            if div_df is None or (hasattr(div_df, "empty") and div_df.empty):
+                div_df = getattr(viz_ctrl, "diversity_df", None)
+            opts = []
+            if div_df is not None and not div_df.empty:
+                opts = [c for c in div_df.columns if c not in ["sample", "Sample", "index"]]
+            self.viz_color_var.options = opts
+            if opts and (not self.viz_color_var.value or self.viz_color_var.value not in opts):
+                self.viz_color_var.value = opts[0]
+            if getattr(self.viz_plot_method, "value", "PCA") != "PLS-DA":
+                self.viz_color_mode.value = "Continuous"
+        self._auto_update_viz_title()
 
     # ---------------- NMF Group Statistics Section Management ----------------
     def _update_nmf_group_section_options(self):
@@ -1868,6 +2156,376 @@ class HTMLReportController:
         except Exception as e:
             self.report_status.object = _warn(f"Failed to generate basis waveform: {e}")
 
+    def _on_add_alpha_peak_plot(self, _=None):
+        sample = self.alpha_peak_sample_select.value
+        if not sample:
+            self.report_status.object = _warn("Please select a sample for peak detection.")
+            return
+
+        div_ctrl = self.controllers.get("diversity")
+        if not div_ctrl:
+            self.report_status.object = _warn("Alpha diversity controller not available.")
+            return
+
+        use_asinh = self.alpha_peak_asinh.value
+        title = self.alpha_peak_title.value or f"Peak Detection: {sample}"
+        caption = self.alpha_peak_caption.value
+
+        fig = None
+        if hasattr(div_ctrl, "get_sample_peak_plot"):
+            try:
+                fig = div_ctrl.get_sample_peak_plot(sample, use_asinh=use_asinh)
+            except Exception as e:
+                self.report_status.object = _warn(f"Failed to generate peak detection plot: {e}")
+                return
+
+        if fig is None:
+            self.report_status.object = _warn(f"Peak detection data for sample '{sample}' not found. Please run 'Compute alpha diversity' in the Alpha Diversity tab first.")
+            return
+
+        fig.sizing_mode = "stretch_width"
+        safe_s = re.sub(r'[^a-zA-Z0-9_]', '_', sample)
+        item_id = f"sub_alpha_peak_{safe_s}_{len(self.additional_pipeline_plots)}"
+        self.additional_pipeline_plots.append({
+            "id": item_id,
+            "type": "alpha_peak_detection",
+            "category": "Alpha Diversity",
+            "title": title,
+            "caption": caption,
+            "figure": fig,
+            "details": f"Sample: {sample} (asinh={use_asinh})"
+        })
+        self._render_additional_plots_list()
+        self.report_status.object = _ok(f"Added peak detection plot for '{sample}' to report.")
+
+    def _on_add_viz_plot(self, _=None):
+        method = self.viz_plot_method.value
+        color_source = self.viz_color_source.value
+        color_var = self.viz_color_var.value
+        color_mode = self.viz_color_mode.value
+        title = self.viz_plot_title.value or f"{method} Score Plot"
+        caption = self.viz_plot_caption.value
+
+        try:
+            fig = self._compute_custom_viz_plot(
+                method=method,
+                color_source=color_source,
+                color_var=color_var,
+                color_mode=color_mode,
+                pca_x=self.viz_pca_x.value,
+                pca_y=self.viz_pca_y.value,
+                pls_x=self.viz_pls_x.value,
+                pls_y=self.viz_pls_y.value,
+                mds_metric=self.viz_mds_metric.value,
+                tsne_metric=self.viz_tsne_metric.value,
+                tsne_perp=self.viz_tsne_perp.value,
+                title=title
+            )
+            if fig is None:
+                self.report_status.object = _warn(f"Failed to generate {method} plot.")
+                return
+
+            fig.sizing_mode = "stretch_width"
+            safe_method = re.sub(r'[^a-zA-Z0-9_]', '_', method.lower())
+            item_id = f"sub_viz_{safe_method}_{len(self.additional_pipeline_plots)}"
+            c_desc = f"{color_var} ({color_mode})" if color_var else "default"
+            self.additional_pipeline_plots.append({
+                "id": item_id,
+                "type": "viz_plot",
+                "category": "Dimensionality Reduction",
+                "title": title,
+                "caption": caption,
+                "figure": fig,
+                "details": f"{method} colored by {c_desc}"
+            })
+            self._render_additional_plots_list()
+            self.report_status.object = _ok(f"Added {method} plot to report.")
+        except Exception as e:
+            self.report_status.object = _warn(f"Failed to generate {method} plot: {e}")
+
+    def _compute_custom_viz_plot(
+        self,
+        method: str,
+        color_source: str,
+        color_var: Optional[str],
+        color_mode: str,
+        pca_x: int = 1,
+        pca_y: int = 2,
+        pls_x: int = 1,
+        pls_y: int = 2,
+        mds_metric: str = "euclidean",
+        tsne_metric: str = "cosine",
+        tsne_perp: float = 30.0,
+        title: Optional[str] = None
+    ) -> Optional[bokeh.models.LayoutDOM]:
+        viz_ctrl = self.controllers.get("viz")
+        nmf_ctrl = self.controllers.get("nmf")
+        div_ctrl = self.controllers.get("diversity")
+
+        H_df = getattr(viz_ctrl, "H_df", None)
+        if H_df is None or H_df.empty:
+            H_df = getattr(nmf_ctrl, "H_df", None)
+        if H_df is None or H_df.empty:
+            raise ValueError("NMF Loadings (H_df) not available. Please run NMF first.")
+
+        H_df = H_df.copy()
+        for cand in ["Unnamed: 0", "sample", "sample_id", "_sid"]:
+            if cand in H_df.columns:
+                H_df = H_df.set_index(cand)
+                break
+
+        valid_samples = None
+        if viz_ctrl and hasattr(viz_ctrl, "_get_valid_samples"):
+            try:
+                valid_samples = viz_ctrl._get_valid_samples()
+            except Exception:
+                valid_samples = None
+        if valid_samples:
+            H_df = H_df.loc[H_df.index.isin(valid_samples)].copy()
+        if H_df.empty:
+            raise ValueError("No valid samples found after filtering.")
+
+        import CEtools as cet
+        X = cet.prepare_features(H_df, row_norm="l1", zscore_cols=True)
+        labels = np.array(list(map(str, H_df.index.astype(str))))
+
+        meta_dict = {}
+        _, metadata_df, sample_col, _ = self._get_nmf_and_meta_data()
+        if color_source == "Metadata Variable" and color_var:
+            if metadata_df is not None and color_var in metadata_df.columns:
+                m_df = metadata_df.copy()
+                m_df["_sid"] = _coerce_sid(m_df[sample_col])
+                val_map = dict(zip(m_df["_sid"], m_df[color_var]))
+                for s in labels:
+                    clean_s = _coerce_sid(pd.Series([s])).iloc[0]
+                    if clean_s in val_map:
+                        meta_dict[s] = val_map[clean_s]
+        elif color_source == "Diversity Metric" and color_var:
+            div_df = getattr(div_ctrl, "metrics_df", None)
+            if div_df is None or (hasattr(div_df, "empty") and div_df.empty):
+                div_df = getattr(viz_ctrl, "diversity_df", None)
+            if div_df is not None and color_var in div_df.columns:
+                div_df = div_df.copy()
+                if "sample" in div_df.columns:
+                    div_df = div_df.set_index("sample")
+                val_map = dict(zip(div_df.index.astype(str), div_df[color_var]))
+                for s in labels:
+                    if s in val_map:
+                        meta_dict[s] = val_map[s]
+
+        cat = (color_mode.lower() == "categorical")
+
+        def _add_ellipses_local(p_fig, x_vals, y_vals, c_vals, cmap):
+            for c in set(c_vals):
+                if c == "NA": continue
+                mask = (np.array(c_vals) == c)
+                xm = x_vals[mask]
+                ym = y_vals[mask]
+                if len(xm) < 3: continue
+                try:
+                    cov = np.cov(xm, ym)
+                    mean_x, mean_y = np.mean(xm), np.mean(ym)
+                    eigvals, eigvecs = np.linalg.eigh(cov)
+                    order = eigvals.argsort()[::-1]
+                    eigvals, eigvecs = eigvals[order], eigvecs[:, order]
+                    angle = np.arctan2(*eigvecs[:, 0][::-1])
+                    width, height = 2 * np.sqrt(5.991 * np.maximum(eigvals, 1e-9))
+                    p_fig.ellipse(x=mean_x, y=mean_y, width=width, height=height, angle=angle, 
+                                  fill_color=cmap[c], line_color=cmap[c], fill_alpha=0.1, line_alpha=0.6,
+                                  legend_label=str(c)[:12])
+                except Exception:
+                    pass
+
+        from bokeh.palettes import Category10, Magma256
+
+        if method == "PCA":
+            from sklearn.decomposition import PCA
+            pcx = max(1, int(pca_x))
+            pcy = max(1, int(pca_y))
+            n_comp = min(X.shape[0], X.shape[1], max(pcx, pcy, 2))
+            pca = PCA(n_components=n_comp, random_state=0)
+            scores = pca.fit_transform(X)
+            ix = min(pcx - 1, scores.shape[1] - 1)
+            iy = min(pcy - 1, scores.shape[1] - 1)
+            x = scores[:, ix]; y = scores[:, iy]
+
+            calc_width = 700 if cat else 620
+            p = bkp.figure(
+                width=calc_width, height=450,
+                title=title or f"PCA of NMF loadings (PC{pcx} vs PC{pcy})",
+                x_axis_label=f"PC{pcx} {pca.explained_variance_ratio_[ix]*100.0:.1f}%",
+                y_axis_label=f"PC{pcy} {pca.explained_variance_ratio_[iy]*100.0:.1f}%",
+                tools="hover,pan,box_zoom,reset,save",
+                active_scroll=None,
+                sizing_mode="stretch_width"
+            )
+
+            if cat:
+                cats = [str(meta_dict.get(s, "NA")) if meta_dict.get(s, None) is not None else "NA" for s in labels]
+                unique = sorted(set(cats))
+                palette = list(Category10[10]) if len(unique) <= 10 else [Magma256[i] for i in np.linspace(0, 255, num=len(unique), dtype=int)]
+                cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
+                for c in unique:
+                    mask = (np.array(cats) == c)
+                    src = bokeh.models.ColumnDataSource(dict(x=x[mask], y=y[mask], label=labels[mask]))
+                    p.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color=cmap[c], source=src, legend_label=str(c)[:12])
+                _add_ellipses_local(p, x, y, cats, cmap)
+                if p.legend:
+                    p.legend.click_policy = "hide"
+                    p.add_layout(p.legend[0], "right")
+            else:
+                vals = []
+                for s in labels:
+                    v = meta_dict.get(s, None)
+                    try:
+                        vals.append(float(v))
+                    except Exception:
+                        vals.append(np.nan)
+                vals = np.asarray(vals, dtype=float)
+                mapper = bokeh.models.LinearColorMapper(
+                    palette=Magma256,
+                    low=float(np.nanmin(vals)) if np.isfinite(vals).any() else 0.0,
+                    high=float(np.nanmax(vals)) if np.isfinite(vals).any() else 1.0,
+                    nan_color="lightgray"
+                )
+                src = bokeh.models.ColumnDataSource(dict(x=x, y=y, label=labels, value=vals))
+                p.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color={"field": "value", "transform": mapper}, source=src)
+                c_label = str(color_var)[:20] if color_var else "Value"
+                cbar = bokeh.models.ColorBar(color_mapper=mapper, title=c_label, label_standoff=8, location=(0, 0))
+                p.add_layout(cbar, "right")
+
+            p.hover.tooltips = [("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]
+            return p
+
+        elif method == "PLS-DA":
+            from sklearn.cross_decomposition import PLSRegression
+            cats = [str(meta_dict.get(s, "NA")) if meta_dict.get(s, None) is not None else "NA" for s in labels]
+            unique = sorted(set(cats))
+            unique_valid = [c for c in unique if c != "NA"]
+            if len(unique_valid) < 2:
+                raise ValueError("PLS-DA requires a categorical variable with at least 2 distinct classes.")
+
+            cat_to_int = {c: i for i, c in enumerate(unique_valid)}
+            y_int = np.array([cat_to_int.get(c, -1) for c in cats])
+            valid_mask = (y_int != -1)
+            if valid_mask.sum() <= 2:
+                raise ValueError("Not enough samples with valid categorical labels for PLS-DA.")
+
+            y_onehot = np.zeros((valid_mask.sum(), len(unique_valid)))
+            y_onehot[np.arange(valid_mask.sum()), y_int[valid_mask]] = 1
+            lv_x = max(1, int(pls_x))
+            lv_y = max(1, int(pls_y))
+            max_pls = min(valid_mask.sum(), X.shape[1], len(unique_valid))
+            ncom_pls = min(max_pls, max(lv_x, lv_y, 2))
+
+            pls = PLSRegression(n_components=ncom_pls)
+            pls.fit(X[valid_mask], y_onehot)
+            scores_pls = pls.transform(X)
+            ix = min(lv_x - 1, scores_pls.shape[1] - 1)
+            iy = min(lv_y - 1, scores_pls.shape[1] - 1)
+            pls_x_vals, pls_y_vals = scores_pls[:, ix], scores_pls[:, iy]
+
+            p = bkp.figure(
+                width=700, height=450,
+                title=title or f"PLS-DA of NMF loadings (LV{lv_x} vs LV{lv_y})",
+                x_axis_label=f"LV{lv_x}", y_axis_label=f"LV{lv_y}",
+                tools="hover,pan,box_zoom,reset,save",
+                active_scroll=None,
+                sizing_mode="stretch_width"
+            )
+            palette = list(Category10[10]) if len(unique) <= 10 else [Magma256[i] for i in np.linspace(0, 255, num=len(unique), dtype=int)]
+            cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
+            for c in unique:
+                mask = (np.array(cats) == c)
+                src = bokeh.models.ColumnDataSource(dict(x=pls_x_vals[mask], y=pls_y_vals[mask], label=labels[mask]))
+                p.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color=cmap[c], source=src, legend_label=str(c)[:12])
+            _add_ellipses_local(p, pls_x_vals, pls_y_vals, cats, cmap)
+            if p.legend:
+                p.legend.click_policy = "hide"
+                p.add_layout(p.legend[0], "right")
+            p.hover.tooltips = [("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]
+            return p
+
+        elif method == "MDS":
+            import bokeh.io as _bio
+            old_show = _bio.show
+            try:
+                _bio.show = lambda *a, **k: None
+                coords, _, mds_fig = cet.embed_with_mds(
+                    H_df,
+                    metric=str(mds_metric),
+                    row_norm="l1",
+                    zscore_cols=True,
+                    metadata=meta_dict if meta_dict else None,
+                    metadata_categorical=cat,
+                    title=title or f"MDS (metric={mds_metric})"
+                )
+            finally:
+                _bio.show = old_show
+
+            mds_fig.sizing_mode = "stretch_width"
+            mds_fig.toolbar.active_scroll = None
+            if cat and meta_dict:
+                mds_fig.renderers = [r for r in mds_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
+                for leg in mds_fig.legend:
+                    for pos in [mds_fig.center, mds_fig.right, mds_fig.left, mds_fig.above, mds_fig.below]:
+                        if leg in pos: pos.remove(leg)
+                x, y = coords[:, 0], coords[:, 1]
+                cats = [str(meta_dict.get(s, "NA")) if meta_dict.get(s, None) is not None else "NA" for s in labels]
+                unique = sorted(set(cats))
+                palette = list(Category10[10]) if len(unique) <= 10 else [Magma256[i] for i in np.linspace(0, 255, num=len(unique), dtype=int)]
+                cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
+                for c in unique:
+                    mask = (np.array(cats) == c)
+                    src = bokeh.models.ColumnDataSource(dict(x=x[mask], y=y[mask], label=labels[mask]))
+                    mds_fig.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color=cmap[c], source=src, legend_label=str(c)[:12])
+                mds_fig.legend.click_policy = "hide"
+                mds_fig.add_layout(mds_fig.legend[-1], "right")
+                mds_fig.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
+            return mds_fig
+
+        elif method == "t-SNE":
+            import bokeh.io as _bio
+            old_show = _bio.show
+            try:
+                _bio.show = lambda *a, **k: None
+                coords, _, tsne_fig = cet.embed_with_tsne(
+                    H_df,
+                    perplexity=float(tsne_perp),
+                    metric=str(tsne_metric),
+                    row_norm="l1",
+                    zscore_cols=True,
+                    random_state=0,
+                    metadata=meta_dict if meta_dict else None,
+                    metadata_categorical=cat,
+                    title=title or f"t-SNE (metric={tsne_metric}, perplexity={tsne_perp:.0f})"
+                )
+            finally:
+                _bio.show = old_show
+
+            tsne_fig.sizing_mode = "stretch_width"
+            tsne_fig.toolbar.active_scroll = None
+            if cat and meta_dict:
+                tsne_fig.renderers = [r for r in tsne_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
+                for leg in tsne_fig.legend:
+                    for pos in [tsne_fig.center, tsne_fig.right, tsne_fig.left, tsne_fig.above, tsne_fig.below]:
+                        if leg in pos: pos.remove(leg)
+                x, y = coords[:, 0], coords[:, 1]
+                cats = [str(meta_dict.get(s, "NA")) if meta_dict.get(s, None) is not None else "NA" for s in labels]
+                unique = sorted(set(cats))
+                palette = list(Category10[10]) if len(unique) <= 10 else [Magma256[i] for i in np.linspace(0, 255, num=len(unique), dtype=int)]
+                cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
+                for c in unique:
+                    mask = (np.array(cats) == c)
+                    src = bokeh.models.ColumnDataSource(dict(x=x[mask], y=y[mask], label=labels[mask]))
+                    tsne_fig.circle("x", "y", size=8, alpha=0.9, line_color=None, fill_color=cmap[c], source=src, legend_label=str(c)[:12])
+                tsne_fig.legend.click_policy = "hide"
+                tsne_fig.add_layout(tsne_fig.legend[-1], "right")
+                tsne_fig.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
+            return tsne_fig
+
+        return None
+
     def _render_additional_plots_list(self):
         if not self.additional_pipeline_plots:
             self.additional_plots_container.objects = [pn.pane.Markdown("*No additional sub-plots added yet.*")]
@@ -1995,6 +2653,15 @@ class HTMLReportController:
                                 "figure": None,
                                 "caption": ""
                             })
+                        elif isinstance(res, dict) and res.get("type") == "alpha_table":
+                            selected_standard_plots.append({
+                                "id": pid,
+                                "category": item["category"],
+                                "title": user_title,
+                                "alpha_table_data": res,
+                                "figure": None,
+                                "caption": ""
+                            })
                         else:
                             fig_to_use = res
                             if item.get("has_offset") and isinstance(res, bokeh.models.LayoutDOM):
@@ -2061,13 +2728,24 @@ class HTMLReportController:
         for sp in self.additional_pipeline_plots:
             fig = sp.get("figure", sp.get("fig"))
             if fig is not None:
-                selected_sub_plots.append({
-                    "id": sp["id"],
-                    "category": "Additional Pipeline Sub-Plots",
-                    "title": sp["title"],
-                    "figure": fig,
-                    "caption": sp.get("caption", "")
-                })
+                p_cat = sp.get("category")
+                if p_cat in ["Alpha Diversity", "Dimensionality Reduction", "Visualization"]:
+                    target_cat = "Dimensionality Reduction" if p_cat == "Visualization" else p_cat
+                    selected_standard_plots.append({
+                        "id": sp["id"],
+                        "category": target_cat,
+                        "title": sp["title"],
+                        "figure": fig,
+                        "caption": sp.get("caption", "")
+                    })
+                else:
+                    selected_sub_plots.append({
+                        "id": sp["id"],
+                        "category": "Additional Pipeline Sub-Plots",
+                        "title": sp["title"],
+                        "figure": fig,
+                        "caption": sp.get("caption", "")
+                    })
 
         # Count total items
         nmf_group_fig_count = 0
@@ -2177,6 +2855,17 @@ class HTMLReportController:
                 categories_dict[cat] = []
             categories_dict[cat].append(sp)
 
+        category_order = [
+            "Raw Data & QC",
+            "Preprocessing",
+            "Alignment",
+            "NMF Decomposition",
+            "Alpha Diversity",
+            "Dimensionality Reduction",
+            "Miscellaneous Analyses"
+        ]
+        ordered_cat_names = [c for c in category_order if c in categories_dict] + [c for c in categories_dict if c not in category_order]
+
         # 7. Build HTML Body & Table of Contents
         toc_items = []
         body_sections_html = ""
@@ -2185,7 +2874,8 @@ class HTMLReportController:
             toc_items.append("<li><a href='#sec-params'>Session Execution Parameters</a></li>")
 
         # Standard Sections
-        for cat_name, items in categories_dict.items():
+        for cat_name in ordered_cat_names:
+            items = categories_dict[cat_name]
             sec_id = f"sec-{re.sub(r'[^a-zA-Z0-9_]', '-', cat_name.lower())}"
             sub_links = []
             sec_html = f"<div class='section-card' id='{sec_id}'>"
@@ -2203,13 +2893,23 @@ class HTMLReportController:
                     {snr_content}
                 </div>
                 """
+                elif it.get("alpha_table_data"):
+                    alpha_content = self._format_alpha_div_table_html(it["alpha_table_data"])
+                    sec_html += f"""
+                <div class="plot-card" id="{card_id}">
+                    <h3 class="plot-title">{it['title']}</h3>
+                    {alpha_content}
+                </div>
+                """
                 else:
                     plot_key = f"std_{it['id']}"
                     div_html = divs.get(plot_key, "")
+                    caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it.get("caption") else ""
                     sec_html += f"""
                 <div class="plot-card" id="{card_id}">
                     <h3 class="plot-title">{it['title']}</h3>
                     <div class="plot-container">{div_html}</div>
+                    {caption_html}
                 </div>
                 """
             sec_html += "</div>"

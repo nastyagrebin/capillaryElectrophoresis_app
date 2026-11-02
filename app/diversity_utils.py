@@ -384,6 +384,7 @@ class DiversityController:
 
         self.table = pn.widgets.Tabulator(pd.DataFrame(), show_index=True, selectable=True, height=380, layout="fit_data_stretch")
         self.plots_column = pn.Column(sizing_mode="stretch_width")
+        self.sample_peaks_all: Dict[str, Tuple[np.ndarray, np.ndarray, List[Peak]]] = {}
 
         self.csv_name = pn.widgets.TextInput(name="CSV filename", value="alpha_diversity.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
@@ -455,6 +456,7 @@ class DiversityController:
         # clear previous results
         self.table.value = pd.DataFrame()
         self.metrics_df = None
+        self.sample_peaks_all = {}
         self.csv_download.disabled = True
         self.plots_column.objects = []
         
@@ -564,6 +566,7 @@ class DiversityController:
             self.metrics_df = df
             self.table.value = df.reset_index()
             self.csv_download.disabled = False
+            self.sample_peaks_all = {name: (x, y, peaks) for name, (x, y), peaks in zip(names, XY, peaks_all)}
             self.status.object = ok(f"Computed alpha diversity for {df.shape[0]} samples across {df.shape[1]} metrics.")
 
             # Build peaks DataFrame
@@ -650,8 +653,57 @@ class DiversityController:
             self.metrics_df = None
             self.table.value = pd.DataFrame()
             self.plots_column.objects = []
+            self.sample_peaks_all = {}
             self.csv_download.disabled = True
             self.status.object = warn(f"Computation failed: {e}")
+
+    def get_sample_peak_plot(self, sample_name: str, use_asinh: Optional[bool] = None):
+        """
+        Generate and return a standalone Bokeh figure showing the detected peaks for a specified sample.
+        """
+        if not hasattr(self, "sample_peaks_all") or sample_name not in self.sample_peaks_all:
+            return None
+        from bokeh.plotting import figure
+        from bokeh.palettes import Category10
+
+        def _get_palette(n: int) -> List[str]:
+            base = list(Category10[10])
+            return [base[i % 10] for i in range(n)]
+
+        x, y, peaks = self.sample_peaks_all[sample_name]
+        asinh_mode = getattr(self.asinh_toggle, "value", True) if use_asinh is None else bool(use_asinh)
+        y_plot = np.arcsinh(y) if asinh_mode else y.copy()
+
+        p = figure(
+            height=250, sizing_mode="stretch_width",
+            x_range=(0.0, 1.0),
+            x_axis_label="pseudotime",
+            y_axis_label=f"{sample_name} (asinh)" if asinh_mode else f"{sample_name} (raw)",
+            tools="pan,wheel_zoom,box_zoom,reset,save",
+            output_backend="svg" if getattr(self.svg_export, "value", False) else "canvas"
+        )
+        p.line(x, y_plot, color="black", line_width=1.5)
+
+        n_peaks = len(peaks)
+        palette = _get_palette(n_peaks) if n_peaks > 0 else []
+
+        for pk_idx, pk in enumerate(peaks):
+            lb, rb = pk.left_base, pk.right_base
+            if lb >= rb:
+                continue
+            pk_left_x = x[lb]
+            pk_right_x = x[rb]
+            pk_center_x = pk.x
+            color = palette[pk_idx]
+
+            # Draw whisker at y=0
+            p.segment(x0=pk_left_x, y0=0, x1=pk_right_x, y1=0, color=color, line_width=2)
+            # Highlight peak center at y=0
+            p.scatter([pk_center_x], [0], color=color, size=6, marker="circle")
+
+        p.xgrid.grid_line_color = None
+        p.ygrid.grid_line_color = None
+        return p
 
     def _csv_bytes(self):
         df = self.metrics_df

@@ -50,6 +50,7 @@ class VizController:
         self.enabled: bool = False
 
         self.diversity_df = None  # NEW: rows=samples, cols=metrics
+        self.last_pca = None
         
         self.rules = []
         self.sliced_df = None
@@ -499,11 +500,14 @@ class VizController:
             ncom = int(self.pca_n.value)
             pcx  = int(self.pca_x.value)
             pcy  = int(self.pca_y.value)
-            ncom_eff = max(ncom, pcx, pcy)
+            max_comp = min(X.shape[0], X.shape[1])
+            ncom_eff = min(max_comp, max(ncom, pcx, pcy))
 
             pca = PCA(n_components=ncom_eff, random_state=0)
             scores = pca.fit_transform(X)
-            ix, iy = pcx - 1, pcy - 1
+            self.last_pca = pca
+            ix = min(pcx - 1, scores.shape[1] - 1)
+            iy = min(pcy - 1, scores.shape[1] - 1)
             x = scores[:, ix]; y = scores[:, iy]
             labels = np.array(list(map(str, H_subset.index.astype(str))))
 
