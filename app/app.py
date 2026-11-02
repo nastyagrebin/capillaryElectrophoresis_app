@@ -901,6 +901,24 @@ preproc_tab = pn.Column(
 from report_utils import build_report_section
 report_section, report_ctrl = build_report_section()
 
+from html_report_utils import build_html_report_section
+html_controllers = {
+    "state": state,
+    "snr": snr_ctrl,
+    "despike": despike_ctrl,
+    "smooth": smooth_ctrl,
+    "baseline": baseline_ctrl,
+    "norm": norm_ctrl,
+    "alignment": alignment_ctrl,
+    "nmf": nmf_ctrl,
+    "nmf_meta": nmf_meta_ctrl,
+    "diversity": diversity_ctrl,
+    "viz": viz_ctrl,
+    "misc": misc_ctrl,
+    "timeseries": timeseries_ctrl,
+}
+html_report_section, html_report_ctrl = build_html_report_section(html_controllers)
+
 TABS = pn.Tabs(
     ("Upload", upload_tab),
     ("SNR", snr_ctrl.section),
@@ -913,6 +931,7 @@ TABS = pn.Tabs(
     ("Miscellaneous", misc_section),
     ("Time Series", timeseries_section),
     ("Final Report", report_section),
+    ("HTML Export", html_report_section),
     dynamic=True,
 )
 
@@ -951,6 +970,8 @@ def _on_tab_change(event):
             
     elif event.new == 10: # Final Report
         report_ctrl.update_preview(state.session_log)
+    elif event.new == 11: # HTML Export
+        html_report_ctrl.refresh_available_plots()
 
 TABS.param.watch(_on_tab_change, "active")
 
@@ -966,7 +987,7 @@ def _update_export_prefixes(event):
         elif not val.startswith(f"{p}_"):
             w.value = f"{p}_{val}"
 
-    for ctrl in [viz_ctrl, diversity_ctrl, misc_ctrl, timeseries_ctrl, nmf_ctrl, nmf_meta_ctrl]:
+    for ctrl in [viz_ctrl, diversity_ctrl, misc_ctrl, timeseries_ctrl, nmf_ctrl, nmf_meta_ctrl, html_report_ctrl]:
         if hasattr(ctrl, "export_prefix"):
             ctrl.export_prefix = p
         else:
