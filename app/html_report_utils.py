@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple, Any, Union, Sequence
 import numpy as np
 import pandas as pd
 import panel as pn
+import param
 import bokeh
 import bokeh.plotting as bkp
 import bokeh.models
@@ -547,6 +548,126 @@ def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float =
     return bokeh.layouts.column(slider, fig_or_layout, sizing_mode="stretch_width")
 
 
+class ReportOutlineWidget(pn.reactive.ReactiveHTML):
+    """Interactive drag-and-drop report outline widget allowing reordering, caption editing, and pruning."""
+    items = param.List(default=[])
+
+    _template = """
+    <div id="outline_container" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
+      {% for item in items %}
+      <div id="outline_item_{{ loop.index0 }}"
+           class="outline-card"
+           draggable="true"
+           ondragstart="${script('drag_start')}"
+           ondragover="${script('drag_over')}"
+           ondragleave="${script('drag_leave')}"
+           ondragend="${script('drag_end')}"
+           ondrop="${script('drop')}"
+           style="padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.15s ease;">
+        
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 10px; cursor: grab;">
+            <span style="color: #94a3b8; font-size: 1.1em; font-family: monospace; font-weight: bold; user-select: none;" title="Drag card to reorder">::</span>
+            <span style="font-weight: 600; color: #1e293b; font-size: 0.95em;">{{ loop.index }}. {{ item.title }}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 0.75em; font-weight: 500; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0;">{{ item.category }}</span>
+            <button type="button" onclick="${script('move_up')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; cursor: pointer;">Move Up</button>
+            <button type="button" onclick="${script('move_down')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; cursor: pointer;">Move Down</button>
+            <button type="button" onclick="${script('remove_item')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #fca5a5; border-radius: 4px; background: #fef2f2; color: #b91c1c; cursor: pointer;">Remove</button>
+          </div>
+        </div>
+
+        <div style="margin-top: 6px;">
+          <label style="font-size: 0.8em; color: #64748b; font-weight: 500; display: block; margin-bottom: 3px;">Figure Caption (optional):</label>
+          <input type="text"
+                 id="caption_input_{{ loop.index0 }}"
+                 value="{{ item.caption }}"
+                 data-idx="{{ loop.index0 }}"
+                 onchange="${script('update_caption')}"
+                 placeholder="Enter optional caption for this figure..."
+                 style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.88em; border: 1px solid #cbd5e1; border-radius: 5px; color: #1e293b; background: #fcfcfd;" />
+        </div>
+      </div>
+      {% endfor %}
+      {% if not items %}
+      <div style="padding: 24px; text-align: center; border: 2px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; color: #64748b; font-style: italic;">
+        No figures or tables selected yet. Select standard plots above or add sub-plots to populate the report outline.
+      </div>
+      {% endif %}
+    </div>
+    """
+
+    _scripts = {
+        'drag_start': """
+            event.dataTransfer.setData("text/plain", event.currentTarget.id);
+            event.dataTransfer.effectAllowed = "move";
+            event.currentTarget.style.opacity = "0.4";
+        """,
+        'drag_end': """
+            event.currentTarget.style.opacity = "1.0";
+        """,
+        'drag_over': """
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            event.currentTarget.style.borderColor = "#3b82f6";
+            event.currentTarget.style.background = "#eff6ff";
+        """,
+        'drag_leave': """
+            event.currentTarget.style.borderColor = "#cbd5e1";
+            event.currentTarget.style.background = "#ffffff";
+        """,
+        'drop': """
+            event.preventDefault();
+            event.currentTarget.style.borderColor = "#cbd5e1";
+            event.currentTarget.style.background = "#ffffff";
+            const srcId = event.dataTransfer.getData("text/plain");
+            const targetId = event.currentTarget.id;
+            if (!srcId || srcId === targetId) return;
+            const srcIdx = parseInt(srcId.replace("outline_item_", ""));
+            const targetIdx = parseInt(targetId.replace("outline_item_", ""));
+            if (isNaN(srcIdx) || isNaN(targetIdx)) return;
+            
+            const newItems = [...data.items];
+            const [moved] = newItems.splice(srcIdx, 1);
+            newItems.splice(targetIdx, 0, moved);
+            data.items = newItems;
+        """,
+        'move_up': """
+            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
+            if (isNaN(idx) || idx <= 0) return;
+            const newItems = [...data.items];
+            const temp = newItems[idx - 1];
+            newItems[idx - 1] = newItems[idx];
+            newItems[idx] = temp;
+            data.items = newItems;
+        """,
+        'move_down': """
+            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
+            if (isNaN(idx) || idx >= data.items.length - 1) return;
+            const newItems = [...data.items];
+            const temp = newItems[idx + 1];
+            newItems[idx + 1] = newItems[idx];
+            newItems[idx] = temp;
+            data.items = newItems;
+        """,
+        'remove_item': """
+            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
+            if (isNaN(idx)) return;
+            const newItems = [...data.items];
+            newItems.splice(idx, 1);
+            data.items = newItems;
+        """,
+        'update_caption': """
+            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
+            if (isNaN(idx) || idx >= data.items.length) return;
+            const newItems = [...data.items];
+            newItems[idx] = {...newItems[idx], caption: event.currentTarget.value};
+            data.items = newItems;
+        """
+    }
+
+
 class HTMLReportController:
     """Controller for the HTML Report Export tab."""
 
@@ -761,6 +882,17 @@ class HTMLReportController:
 
         self.report_status = pn.pane.Markdown("", sizing_mode="stretch_width")
 
+        # ---------------- 6. Report Structure & Reordering Outline ----------------
+        self.outline_widget = ReportOutlineWidget()
+        self.refresh_outline_btn = pn.widgets.Button(
+            name="Refresh Outline",
+            button_type="default",
+            width=140
+        )
+        self.refresh_outline_btn.on_click(lambda _: self._refresh_outline())
+        self.outline_count_md = pn.pane.Markdown("**0** items in report outline", margin=(5, 0, 0, 10))
+        self.outline_widget.param.watch(self._on_outline_items_changed, "items")
+
         # ---------------- Layout Construction (Full Width, No Preview) ----------------
         self.section = pn.Column(
             pn.pane.Markdown("## HTML Report Export"),
@@ -838,8 +970,19 @@ class HTMLReportController:
             self.custom_images_container,
             pn.layout.Divider(),
 
-            # Card 6: Generate & Download
-            pn.pane.Markdown("### 6. Export Report"),
+            # Card 6: Reordering Outline
+            pn.pane.Markdown("### 6. Report Structure & Reordering Outline"),
+            pn.pane.Markdown(
+                "Review the outline below. Drag and drop figure cards to reorder how they will appear in the generated "
+                "HTML report. You can also use the Move Up / Move Down buttons, edit figure captions inline, or remove figures. "
+                "Click 'Refresh Outline' to sync with the latest plot selections."
+            ),
+            pn.Row(self.refresh_outline_btn, self.outline_count_md, align="center"),
+            self.outline_widget,
+            pn.layout.Divider(),
+
+            # Card 7: Generate & Download
+            pn.pane.Markdown("### 7. Export Report"),
             pn.Row(self.build_report_btn, self.download_report_btn),
             self.report_status,
             sizing_mode="stretch_width"
@@ -848,6 +991,7 @@ class HTMLReportController:
         # Initialize available plots
         self._init_standard_plot_definitions()
         self.refresh_available_plots()
+        self._refresh_outline()
 
     @property
     def export_prefix(self) -> str:
@@ -865,6 +1009,142 @@ class HTMLReportController:
             curr_fn = self.filename_input.value
             if not curr_fn or (old_val and curr_fn.startswith(old_val)):
                 self.filename_input.value = f"{self._export_prefix}_report.html"
+
+    # ---------------- Report Outline Reordering & Sync ----------------
+    def _on_outline_items_changed(self, event):
+        old_items = event.old or []
+        new_items = event.new or []
+        old_ids = {x["id"] for x in old_items}
+        new_ids = {x["id"] for x in new_items}
+        removed_ids = old_ids - new_ids
+        for rid in removed_ids:
+            if hasattr(self, "_standard_plot_widgets") and rid in self._standard_plot_widgets:
+                self._standard_plot_widgets[rid]["checkbox"].value = False
+            elif rid.startswith("nmf_grp_"):
+                col = rid.replace("nmf_grp_", "")
+                self.nmf_group_sections = [s for s in self.nmf_group_sections if re.sub(r'[^a-zA-Z0-9_]', '_', s["col_name"]) != col]
+                self._render_nmf_group_sections()
+            else:
+                self.additional_pipeline_plots = [p for p in self.additional_pipeline_plots if p["id"] != rid]
+                self._render_additional_plots_list()
+                self.custom_images = [img for img in self.custom_images if img["id"] != rid]
+                self._render_custom_images_list()
+
+        self.outline_count_md.object = f"**{len(new_items)}** items in report outline (drag cards to reorder)"
+
+    def _refresh_outline(self):
+        """Re-scan all active standard plots, sub-plots, custom images, and NMF groups into the outline."""
+        candidate_items: List[Dict[str, Any]] = []
+
+        # 1. Standard plots (if selected and ready)
+        if hasattr(self, "plot_catalog") and hasattr(self, "_standard_plot_widgets"):
+            for item in self.plot_catalog:
+                pid = item["id"]
+                if pid in self._standard_plot_widgets:
+                    w = self._standard_plot_widgets[pid]
+                    if w["checkbox"].value and w["is_ready"]:
+                        user_caption = w["caption_input"].value.strip() if ("caption_input" in w and w["caption_input"].value) else ""
+                        candidate_items.append({
+                            "id": pid,
+                            "title": item["default_title"],
+                            "category": item["category"],
+                            "caption": user_caption,
+                            "kind": "standard"
+                        })
+
+        # 2. Nested NMF Group Statistics sections
+        for g_sec in getattr(self, "nmf_group_sections", []):
+            col_name = g_sec["col_name"]
+            inc_recon = g_sec["include_recon"].value
+            inc_sig = g_sec["include_sig"].value
+            inc_pval = g_sec["include_pval"].value
+            inc_loadings = g_sec["include_loadings"].value
+            if inc_recon or inc_sig or inc_pval or inc_loadings:
+                title_text = g_sec["custom_title"].value or f"NMF Group Analysis: {col_name}"
+                safe_col = re.sub(r'[^a-zA-Z0-9_]', '_', col_name)
+                candidate_items.append({
+                    "id": f"nmf_grp_{safe_col}",
+                    "title": title_text,
+                    "category": "NMF Group Statistics",
+                    "caption": "",
+                    "kind": "nmf_group"
+                })
+
+        # 3. Pipeline tabs (sync from controllers if any new plots were sent)
+        for ctrl_name, cat_default in [
+            ("misc", "Miscellaneous Analyses"),
+            ("viz", "Dimensionality Reduction"),
+            ("diversity", "Alpha Diversity"),
+            ("timeseries", "Time Series & Pseudotime")
+        ]:
+            ctrl = self.controllers.get(ctrl_name)
+            if ctrl and hasattr(ctrl, "html_plots"):
+                existing_ids = {p["id"] for p in self.additional_pipeline_plots}
+                for p in ctrl.html_plots:
+                    if p["id"] not in existing_ids:
+                        entry = {
+                            "id": p["id"],
+                            "type": p.get("type", "custom_plot"),
+                            "category": p.get("category", cat_default),
+                            "title": p["title"],
+                            "caption": p.get("caption", ""),
+                            "figure": p.get("figure"),
+                            "details": f"{p.get('category', cat_default)} ({p['title']})"
+                        }
+                        if "alpha_table_data" in p:
+                            entry["alpha_table_data"] = p["alpha_table_data"]
+                        if "markov_table_data" in p:
+                            entry["markov_table_data"] = p["markov_table_data"]
+                        self.additional_pipeline_plots.append(entry)
+
+        # 4. Additional Sub-Plots
+        for sp in getattr(self, "additional_pipeline_plots", []):
+            fig = sp.get("figure", sp.get("fig"))
+            has_table = ("alpha_table_data" in sp) or ("markov_table_data" in sp)
+            if fig is not None or has_table:
+                candidate_items.append({
+                    "id": sp["id"],
+                    "title": sp["title"],
+                    "category": sp.get("category", "Additional Sub-Plots"),
+                    "caption": sp.get("caption", ""),
+                    "kind": "subplot"
+                })
+
+        # 5. Uploaded external images
+        for img in getattr(self, "custom_images", []):
+            candidate_items.append({
+                "id": img["id"],
+                "title": img["title"],
+                "category": "External Figures",
+                "caption": img.get("caption", ""),
+                "kind": "image"
+            })
+
+        # Merge with existing outline preserving custom order and edited captions
+        existing_lookup = {x["id"]: x for x in self.outline_widget.items}
+        candidate_lookup = {x["id"]: x for x in candidate_items}
+
+        merged_items = []
+        seen = set()
+
+        # Retain existing order for active items
+        for old_item in self.outline_widget.items:
+            oid = old_item["id"]
+            if oid in candidate_lookup:
+                cand = candidate_lookup[oid].copy()
+                if old_item.get("caption") is not None:
+                    cand["caption"] = old_item["caption"]
+                merged_items.append(cand)
+                seen.add(oid)
+
+        # Append new candidates
+        for cand in candidate_items:
+            if cand["id"] not in seen:
+                merged_items.append(cand)
+                seen.add(cand["id"])
+
+        self.outline_widget.items = merged_items
+        self.outline_count_md.object = f"**{len(merged_items)}** items in report outline (drag cards to reorder)"
 
     # ---------------- Standard Plot Registry ----------------
     def _init_standard_plot_definitions(self):
@@ -1515,6 +1795,89 @@ class HTMLReportController:
         """
         return table_content
 
+    def _format_markov_table_html(self, markov_data: Dict[str, Any]) -> str:
+        df = markov_data.get("df")
+        if df is None or (hasattr(df, "empty") and df.empty):
+            return "<p style='color: #64748b; font-style: italic;'>No Markov covariate analysis data available.</p>"
+
+        interpretation = markov_data.get("interpretation", "")
+        state_col = markov_data.get("state_col", "State")
+        cov_col = markov_data.get("cov_col", "Covariate")
+
+        summary_header = f"""
+        <div style="display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 16px; flex: 1; min-width: 220px;">
+                <div style="font-size: 0.8rem; color: #1e40af; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;">Markov Covariate Statistical Analysis</div>
+                <div style="font-size: 1.15rem; color: #1e3a8a; font-weight: 700;">{state_col} ~ {cov_col}</div>
+                <div style="font-size: 0.8rem; color: #3b82f6; margin-top: 4px;">Statistical evaluation of covariate influence on state transitions</div>
+            </div>
+        </div>
+        """
+
+        interp_html = ""
+        if interpretation:
+            clean_text = interpretation.replace("### Covariate Statistical Analysis", "").replace("**Statistical Association Findings:**", "").strip()
+            clean_text = clean_text.replace("\n", "<br>")
+            clean_text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', clean_text)
+            clean_text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', clean_text)
+            interp_html = f"""
+            <div style="background: #f8fafc; border-left: 4px solid #3b82f6; border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.9em; color: #1e293b; line-height: 1.5;">
+                <div style="font-weight: 700; color: #1e40af; margin-bottom: 6px; text-transform: uppercase; font-size: 0.8em; letter-spacing: 0.05em;">Statistical Association Findings</div>
+                {clean_text}
+            </div>
+            """
+
+        headers = list(df.columns)
+        th_cells = []
+        for h in headers:
+            align = "left" if h in ["From", "To", "Significance"] else "right"
+            th_cells.append(f"<th style='padding: 10px 14px; font-weight: 600; text-align: {align}; border-bottom: 2px solid #cbd5e1; background: #f8fafc; color: #334155; white-space: nowrap;'>{h}</th>")
+        thead_html = f"<thead style='position: sticky; top: 0; z-index: 1;'><tr>{''.join(th_cells)}</tr></thead>"
+
+        tr_rows = []
+        for idx, row in df.iterrows():
+            td_cells = []
+            bg = "#ffffff" if idx % 2 == 0 else "#f8fafc"
+            for h in headers:
+                val = row[h]
+                align = "left" if h in ["From", "To", "Significance"] else "right"
+                if pd.isna(val) or (isinstance(val, float) and np.isinf(val)):
+                    val_str = "-"
+                    bold_style = "color: #94a3b8;"
+                elif isinstance(val, (int, np.integer)):
+                    val_str = f"{val}"
+                    bold_style = "color: #334155;"
+                elif isinstance(val, (float, np.floating)):
+                    if h in ["p_value", "FDR_p"]:
+                        val_str = f"{val:.3e}" if val < 0.001 else f"{val:.4f}"
+                    elif h in ["Odds Ratio", "CI_Lower", "CI_Upper", "Stat"]:
+                        val_str = f"{val:.3f}"
+                    else:
+                        val_str = f"{val:.2f}"
+                    bold_style = "color: #334155;"
+                else:
+                    val_str = str(val)
+                    bold_style = "color: #334155;"
+
+                if h == "Significance" and "p < 0.05" in str(val):
+                    val_str = f"<span style='background: #dcfce7; color: #166534; font-weight: 600; padding: 2px 6px; border-radius: 4px; font-size: 0.85em;'>{val_str}</span>"
+
+                td_cells.append(f"<td style='padding: 8px 14px; text-align: {align}; {bold_style} border-bottom: 1px solid #e2e8f0; white-space: nowrap;'>{val_str}</td>")
+            tr_rows.append(f"<tr style='background: {bg};'>{''.join(td_cells)}</tr>")
+        tbody_html = f"<tbody>{''.join(tr_rows)}</tbody>"
+
+        table_content = f"""
+        {summary_header}
+        {interp_html}
+        <div style="overflow-x: auto; max-height: 480px; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 16px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                {thead_html}
+                {tbody_html}
+            </table>
+        </div>
+        """
+        return table_content
+
     def _get_plot_diversity(self):
         ctrl = self.controllers.get("diversity")
         if not ctrl:
@@ -1794,6 +2157,9 @@ class HTMLReportController:
                     )
                     chk.param.watch(lambda e, sl=offset_slider: setattr(sl, "disabled", not e.new), "value")
 
+                chk.param.watch(lambda _: self._refresh_outline(), "value")
+                caption_inp.param.watch(lambda _: self._refresh_outline(), "value")
+
                 self._standard_plot_widgets[it["id"]] = {
                     "checkbox": chk,
                     "title_input": caption_inp,
@@ -1843,13 +2209,17 @@ class HTMLReportController:
                         }
                         if "alpha_table_data" in p:
                             entry["alpha_table_data"] = p["alpha_table_data"]
+                        if "markov_table_data" in p:
+                            entry["markov_table_data"] = p["markov_table_data"]
                         self.additional_pipeline_plots.append(entry)
         self._render_additional_plots_list()
+        self._refresh_outline()
 
     def _set_all_selected(self, select: bool):
         for data in self._standard_plot_widgets.values():
             if data["is_ready"]:
                 data["checkbox"].value = select
+        self._refresh_outline()
 
     def _update_dropdowns(self):
         """Populate sample reconstruction, basis selection, and peak detection dropdowns."""
@@ -2018,11 +2388,13 @@ class HTMLReportController:
         }
         self.nmf_group_sections.append(entry)
         self._render_nmf_group_sections_ui()
+        self._refresh_outline()
         self.report_status.object = _ok(f"Added NMF Group Statistics section for '{col_name}'.")
 
     def _remove_category_section(self, col_name: str):
         self.nmf_group_sections = [s for s in self.nmf_group_sections if s["col_name"] != col_name]
         self._render_nmf_group_sections_ui()
+        self._refresh_outline()
         self.report_status.object = _ok(f"Removed variable '{col_name}'.")
 
     def _render_nmf_group_sections_ui(self):
@@ -2095,6 +2467,7 @@ class HTMLReportController:
                 "details": f"Sample: {sample} (asinh={use_asinh})"
             })
             self._render_additional_plots_list()
+            self._refresh_outline()
             self.report_status.object = _ok(f"Added reconstruction plot for '{sample}' to report.")
         except Exception as e:
             self.report_status.object = _warn(f"Failed to generate reconstruction: {e}")
@@ -2152,6 +2525,7 @@ class HTMLReportController:
                 "details": f"Basis: {basis} (Gaussian kernel)"
             })
             self._render_additional_plots_list()
+            self._refresh_outline()
             self.report_status.object = _ok(f"Added waveform plot for '{basis}' to report.")
         except Exception as e:
             self.report_status.object = _warn(f"Failed to generate basis waveform: {e}")
@@ -2196,6 +2570,7 @@ class HTMLReportController:
             "details": f"Sample: {sample} (asinh={use_asinh})"
         })
         self._render_additional_plots_list()
+        self._refresh_outline()
         self.report_status.object = _ok(f"Added peak detection plot for '{sample}' to report.")
 
     def _on_add_viz_plot(self, _=None):
@@ -2238,6 +2613,7 @@ class HTMLReportController:
                 "details": f"{method} colored by {c_desc}"
             })
             self._render_additional_plots_list()
+            self._refresh_outline()
             self.report_status.object = _ok(f"Added {method} plot to report.")
         except Exception as e:
             self.report_status.object = _warn(f"Failed to generate {method} plot: {e}")
@@ -2245,7 +2621,7 @@ class HTMLReportController:
     def add_pipeline_plot(self, plot_dict: Dict[str, Any]):
         """Receive a plot sent from any tab (Misc, Viz, Diversity, TimeSeries) via 'Send to HTML'."""
         fig = plot_dict.get("figure")
-        has_table = "alpha_table_data" in plot_dict
+        has_table = ("alpha_table_data" in plot_dict) or ("markov_table_data" in plot_dict)
         if fig is None and not has_table:
             return
         category = plot_dict.get("category", "Miscellaneous Analyses")
@@ -2259,9 +2635,12 @@ class HTMLReportController:
                 p["title"] = title
                 p["caption"] = caption
                 p["category"] = category
-                if has_table:
+                if "alpha_table_data" in plot_dict:
                     p["alpha_table_data"] = plot_dict["alpha_table_data"]
+                if "markov_table_data" in plot_dict:
+                    p["markov_table_data"] = plot_dict["markov_table_data"]
                 self._render_additional_plots_list()
+                self._refresh_outline()
                 self.report_status.object = _ok(f"Updated '{title}' in report ({category}).")
                 return
 
@@ -2274,10 +2653,13 @@ class HTMLReportController:
             "figure": fig,
             "details": f"{category} ({title})"
         }
-        if has_table:
+        if "alpha_table_data" in plot_dict:
             entry["alpha_table_data"] = plot_dict["alpha_table_data"]
+        if "markov_table_data" in plot_dict:
+            entry["markov_table_data"] = plot_dict["markov_table_data"]
         self.additional_pipeline_plots.append(entry)
         self._render_additional_plots_list()
+        self._refresh_outline()
         self.report_status.object = _ok(f"Added '{title}' to report ({category}).")
 
     def add_misc_plot(self, plot_dict: Dict[str, Any]):
@@ -2390,8 +2772,8 @@ class HTMLReportController:
             x = scores[:, ix]; y = scores[:, iy]
 
             p = bkp.figure(
-                frame_width=450, frame_height=450,
-                match_aspect=True, aspect_ratio=1.0,
+                frame_width=400, frame_height=400,
+                match_aspect=False, aspect_ratio=None,
                 title=title or f"PCA of NMF loadings (PC{pcx} vs PC{pcy})",
                 x_axis_label=f"PC{pcx} {pca.explained_variance_ratio_[ix]*100.0:.1f}%",
                 y_axis_label=f"PC{pcy} {pca.explained_variance_ratio_[iy]*100.0:.1f}%",
@@ -2465,8 +2847,8 @@ class HTMLReportController:
             pls_x_vals, pls_y_vals = scores_pls[:, ix], scores_pls[:, iy]
 
             p = bkp.figure(
-                frame_width=450, frame_height=450,
-                match_aspect=True, aspect_ratio=1.0,
+                frame_width=400, frame_height=400,
+                match_aspect=False, aspect_ratio=None,
                 title=title or f"PLS-DA of NMF loadings (LV{lv_x} vs LV{lv_y})",
                 x_axis_label=f"LV{lv_x}", y_axis_label=f"LV{lv_y}",
                 tools="hover,pan,box_zoom,reset,save",
@@ -2502,11 +2884,13 @@ class HTMLReportController:
             finally:
                 _bio.show = old_show
 
-            mds_fig.frame_width = 450
-            mds_fig.frame_height = 450
-            mds_fig.match_aspect = True
-            mds_fig.aspect_ratio = 1.0
+            mds_fig.frame_width = 400
+            mds_fig.frame_height = 400
+            mds_fig.match_aspect = False
+            mds_fig.aspect_ratio = None
             mds_fig.sizing_mode = None
+            mds_fig.width = None
+            mds_fig.height = None
             mds_fig.toolbar.active_scroll = None
             if cat and meta_dict:
                 mds_fig.renderers = [r for r in mds_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
@@ -2546,11 +2930,13 @@ class HTMLReportController:
             finally:
                 _bio.show = old_show
 
-            tsne_fig.frame_width = 450
-            tsne_fig.frame_height = 450
-            tsne_fig.match_aspect = True
-            tsne_fig.aspect_ratio = 1.0
+            tsne_fig.frame_width = 400
+            tsne_fig.frame_height = 400
+            tsne_fig.match_aspect = False
+            tsne_fig.aspect_ratio = None
             tsne_fig.sizing_mode = None
+            tsne_fig.width = None
+            tsne_fig.height = None
             tsne_fig.toolbar.active_scroll = None
             if cat and meta_dict:
                 tsne_fig.renderers = [r for r in tsne_fig.renderers if str(type(r).__name__) != 'GlyphRenderer']
@@ -2592,6 +2978,7 @@ class HTMLReportController:
         if 0 <= index < len(self.additional_pipeline_plots):
             self.additional_pipeline_plots.pop(index)
             self._render_additional_plots_list()
+            self._refresh_outline()
             self.report_status.object = _ok("Removed sub-plot.")
 
     # ---------------- Custom Image Upload Handlers ----------------
@@ -2627,6 +3014,7 @@ class HTMLReportController:
             "data_uri": data_uri
         })
         self._render_custom_images_list()
+        self._refresh_outline()
         self.report_status.object = _ok(f"Added image '{filename}' to report.")
         self.image_file_input.value = None
 
@@ -2649,6 +3037,7 @@ class HTMLReportController:
         if 0 <= index < len(self.custom_images):
             self.custom_images.pop(index)
             self._render_custom_images_list()
+            self._refresh_outline()
             self.report_status.object = _ok("Removed image.")
 
     # ---------------- Report HTML Assembly & Generation ----------------
@@ -2793,13 +3182,15 @@ class HTMLReportController:
                         }
                         if "alpha_table_data" in p:
                             entry["alpha_table_data"] = p["alpha_table_data"]
+                        if "markov_table_data" in p:
+                            entry["markov_table_data"] = p["markov_table_data"]
                         self.additional_pipeline_plots.append(entry)
 
         # 3. Collect additional subplots
         selected_sub_plots = []
         for sp in self.additional_pipeline_plots:
             fig = sp.get("figure", sp.get("fig"))
-            has_table = "alpha_table_data" in sp
+            has_table = ("alpha_table_data" in sp) or ("markov_table_data" in sp)
             if fig is not None or has_table:
                 p_cat = sp.get("category")
                 if p_cat in [
@@ -2825,7 +3216,8 @@ class HTMLReportController:
                         "title": sp["title"],
                         "figure": fig,
                         "caption": sp.get("caption", ""),
-                        "alpha_table_data": sp.get("alpha_table_data")
+                        "alpha_table_data": sp.get("alpha_table_data"),
+                        "markov_table_data": sp.get("markov_table_data")
                     })
                 else:
                     selected_sub_plots.append({
@@ -2834,7 +3226,8 @@ class HTMLReportController:
                         "title": sp["title"],
                         "figure": fig,
                         "caption": sp.get("caption", ""),
-                        "alpha_table_data": sp.get("alpha_table_data")
+                        "alpha_table_data": sp.get("alpha_table_data"),
+                        "markov_table_data": sp.get("markov_table_data")
                     })
 
         # Count total items
@@ -2957,192 +3350,360 @@ class HTMLReportController:
         ]
         ordered_cat_names = [c for c in category_order if c in categories_dict] + [c for c in categories_dict if c not in category_order]
 
-        # 7. Build HTML Body & Table of Contents
+        # 7. Build HTML Body & Table of Contents (Outline-driven or Category fallback)
         toc_items = []
         body_sections_html = ""
 
         if self.include_params_chk.value and params_html:
             toc_items.append("<li><a href='#sec-params'>Session Execution Parameters</a></li>")
 
-        # Standard Sections
-        for cat_name in ordered_cat_names:
-            items = categories_dict[cat_name]
-            sec_id = f"sec-{re.sub(r'[^a-zA-Z0-9_]', '-', cat_name.lower())}"
-            sub_links = []
-            sec_html = f"<div class='section-card' id='{sec_id}'>"
-            sec_html += f"<h2 class='section-title'>{cat_name}</h2>"
-
-            for it in items:
-                card_id = f"card-{it['id']}"
-                sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
-                caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it.get("caption") else ""
-
-                if it.get("snr_data") is not None:
-                    snr_content = self._format_snr_html(it["snr_data"])
-                    sec_html += f"""
-                <div class="plot-card" id="{card_id}">
-                    <h3 class="plot-title">{it['title']}</h3>
-                    {snr_content}
-                    {caption_html}
-                </div>
-                """
-                elif it.get("alpha_table_data") is not None:
-                    alpha_content = self._format_alpha_div_table_html(it["alpha_table_data"])
-                    sec_html += f"""
-                <div class="plot-card" id="{card_id}">
-                    <h3 class="plot-title">{it['title']}</h3>
-                    {alpha_content}
-                    {caption_html}
-                </div>
-                """
-                else:
-                    plot_key = f"std_{it['id']}"
-                    div_html = divs.get(plot_key, "")
-                    sec_html += f"""
-                <div class="plot-card" id="{card_id}">
-                    <h3 class="plot-title">{it['title']}</h3>
-                    <div class="plot-container">{div_html}</div>
-                    {caption_html}
-                </div>
-                """
-            sec_html += "</div>"
-            body_sections_html += sec_html
-
-            sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
-            toc_items.append(f"<li><a href='#{sec_id}'>{cat_name}</a>{sub_ul}</li>")
-
-        # Nested NMF Group Statistics Section
-        if selected_nmf_groups:
-            sec_id = "sec-nmf-group-statistics"
-            sec_html = f"<div class='section-card' id='{sec_id}'>"
-            sec_html += "<h2 class='section-title'>NMF Group Statistics</h2>"
-            sec_html += "<div class='nested-group-container'>"
-
-            cat_toc_links = []
+        if self.outline_widget.items:
+            # Render using custom outline order
+            item_lookup: Dict[str, Dict[str, Any]] = {}
+            for sp in selected_standard_plots:
+                item_lookup[sp["id"]] = sp
+            for sp in selected_sub_plots:
+                item_lookup[sp["id"]] = sp
+            for img in self.custom_images:
+                item_lookup[img["id"]] = img
             for g_idx, grp in enumerate(selected_nmf_groups):
                 safe_c = re.sub(r'[^a-zA-Z0-9_]', '_', grp["col_name"])
-                cat_block_id = f"cat-block-{safe_c}-{g_idx}"
-                groups_str = ", ".join([str(g) for g in grp.get("groups", [])])
-                meta_sub = f"Differential analysis grouped by <code>{grp['col_name']}</code> ({len(grp.get('groups', []))} groups: {groups_str})" if groups_str else f"Differential analysis grouped by <code>{grp['col_name']}</code>"
+                item_lookup[f"nmf_grp_{safe_c}"] = {**grp, "kind": "nmf_group", "g_idx": g_idx, "safe_c": safe_c}
 
-                sec_html += f"""
-                <div class="category-block" id="{cat_block_id}">
-                    <h3 class="category-title">{grp['title']}</h3>
-                    <p class="category-subtitle">{meta_sub}</p>
-                """
+            active_outline = []
+            seen_ids = set()
+            for out_it in self.outline_widget.items:
+                oid = out_it["id"]
+                if oid in item_lookup:
+                    active_outline.append((out_it, item_lookup[oid]))
+                    seen_ids.add(oid)
 
-                sub_plot_links = []
+            for cid, c_item in item_lookup.items():
+                if cid not in seen_ids:
+                    active_outline.append(({"id": cid, "title": c_item.get("title", cid), "category": c_item.get("category", ""), "caption": c_item.get("caption", "")}, c_item))
+                    seen_ids.add(cid)
 
-                # Recon
-                if grp.get("recon_fig") is not None:
-                    k = f"nmf_grp_{safe_c}_recon_{g_idx}"
-                    f_id = f"fig-{safe_c}-recon"
-                    sub_plot_links.append(f"<li><a href='#{f_id}'>Sample Reconstruction</a></li>")
-                    sec_html += f"""
-                    <div class="plot-card" id="{f_id}">
-                        <h4 class="plot-title">Sample Reconstruction by Group: {grp['col_name']} (asinh)</h4>
-                        <div class="plot-container">{divs.get(k, '')}</div>
+            outline_cards_html = ""
+            for idx, (out_meta, it) in enumerate(active_outline, 1):
+                item_title = out_meta.get("title") or it.get("title", f"Figure {idx}")
+                item_category = out_meta.get("category") or it.get("category", "")
+                item_caption = out_meta.get("caption") if out_meta.get("caption") is not None else it.get("caption", "")
+                caption_html = f"<p class='plot-caption'>{item_caption}</p>" if item_caption else ""
+                card_id = f"card-{out_meta['id']}"
+
+                toc_items.append(f"<li><a href='#{card_id}'>{idx}. {item_title}</a></li>")
+
+                if it.get("kind") == "nmf_group":
+                    safe_c = it["safe_c"]
+                    g_idx = it["g_idx"]
+                    groups_str = ", ".join([str(g) for g in it.get("groups", [])])
+                    meta_sub = f"Differential analysis grouped by <code>{it['col_name']}</code> ({len(it.get('groups', []))} groups: {groups_str})" if groups_str else f"Differential analysis grouped by <code>{it['col_name']}</code>"
+
+                    grp_cards = ""
+                    if it.get("recon_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_recon_{g_idx}"
+                        grp_cards += f"""
+                        <div class="plot-card" style="margin-top: 12px;">
+                            <h4 class="plot-title">Sample Reconstruction by Group: {it['col_name']} (asinh)</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>"""
+                    if it.get("sig_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_sig_{g_idx}"
+                        grp_cards += f"""
+                        <div class="plot-card" style="margin-top: 12px;">
+                            <h4 class="plot-title">Basis Significance Across Groups: {it['col_name']} (-log10 q)</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>"""
+                    if it.get("pval_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_pval_{g_idx}"
+                        grp_cards += f"""
+                        <div class="plot-card" style="margin-top: 12px;">
+                            <h4 class="plot-title">Basis p-value Heatmap Across Groups: {it['col_name']}</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>"""
+                    for b_name, j_fig in it.get("jitter_figs", {}).items():
+                        safe_b = re.sub(r'[^a-zA-Z0-9_]', '_', b_name)
+                        k = f"nmf_grp_{safe_c}_jitter_{safe_b}_{g_idx}"
+                        grp_cards += f"""
+                        <div class="plot-card" style="margin-top: 12px;">
+                            <h4 class="plot-title">Loadings by Group: {b_name} ({it['col_name']})</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>"""
+
+                    outline_cards_html += f"""
+                    <div class="section-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="section-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        <p class="category-subtitle" style="margin-top: 4px; margin-bottom: 12px;">{meta_sub}</p>
+                        {grp_cards}
+                        {caption_html}
+                    </div>
+                    """
+                elif it.get("snr_data") is not None:
+                    snr_content = self._format_snr_html(it["snr_data"])
+                    outline_cards_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="plot-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        {snr_content}
+                        {caption_html}
+                    </div>
+                    """
+                elif it.get("alpha_table_data") is not None:
+                    alpha_content = self._format_alpha_div_table_html(it["alpha_table_data"])
+                    outline_cards_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="plot-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        {alpha_content}
+                        {caption_html}
+                    </div>
+                    """
+                elif it.get("markov_table_data") is not None:
+                    markov_content = self._format_markov_table_html(it["markov_table_data"])
+                    outline_cards_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="plot-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        {markov_content}
+                        {caption_html}
+                    </div>
+                    """
+                elif it.get("data_uri"):
+                    outline_cards_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="plot-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        <div class="image-container" style="text-align: center; margin: 12px 0;">
+                            <img src="{it['data_uri']}" alt="{it['title']}" class="responsive-img" style="max-width: 100%; height: auto; border-radius: 6px; border: 1px solid #cbd5e1;" />
+                        </div>
+                        {caption_html}
+                    </div>
+                    """
+                else:
+                    plot_key = f"std_{it['id']}" if f"std_{it['id']}" in divs else f"sub_{it['id']}"
+                    div_html = divs.get(plot_key, "")
+                    outline_cards_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                            <h3 class="plot-title" style="margin-bottom: 0;">{idx}. {item_title}</h3>
+                            <span style="font-size: 0.78em; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0; font-weight: 500;">{item_category}</span>
+                        </div>
+                        <div class="plot-container">{div_html}</div>
+                        {caption_html}
                     </div>
                     """
 
-                # Significance (q-value)
-                if grp.get("sig_fig") is not None:
-                    k = f"nmf_grp_{safe_c}_sig_{g_idx}"
-                    f_id = f"fig-{safe_c}-sig"
-                    sub_plot_links.append(f"<li><a href='#{f_id}'>Basis Significance (q-value)</a></li>")
-                    sec_html += f"""
-                    <div class="plot-card" id="{f_id}">
-                        <h4 class="plot-title">NMF Basis Significance: {grp['col_name']} (q-value)</h4>
-                        <div class="plot-container">{divs.get(k, '')}</div>
-                    </div>
-                    """
-
-                # Significance (p-value)
-                if grp.get("pval_fig") is not None:
-                    k = f"nmf_grp_{safe_c}_pval_{g_idx}"
-                    f_id = f"fig-{safe_c}-pval"
-                    sub_plot_links.append(f"<li><a href='#{f_id}'>Basis Significance (p-value)</a></li>")
-                    sec_html += f"""
-                    <div class="plot-card" id="{f_id}">
-                        <h4 class="plot-title">NMF Basis Significance: {grp['col_name']} (p-value)</h4>
-                        <div class="plot-container">{divs.get(k, '')}</div>
-                    </div>
-                    """
-
-                # Basis Loadings Jitter
-                for b_name in grp.get("jitter_figs", {}):
-                    safe_b = re.sub(r'[^a-zA-Z0-9_]', '_', b_name)
-                    k = f"nmf_grp_{safe_c}_jitter_{safe_b}_{g_idx}"
-                    f_id = f"fig-{safe_c}-jitter-{safe_b}"
-                    sub_plot_links.append(f"<li><a href='#{f_id}'>Loadings: {b_name}</a></li>")
-                    sec_html += f"""
-                    <div class="plot-card" id="{f_id}">
-                        <h4 class="plot-title">Basis Loadings by Group: {b_name} ({grp['col_name']})</h4>
-                        <div class="plot-container">{divs.get(k, '')}</div>
-                    </div>
-                    """
-
-                sec_html += "</div>" # close category-block
-
-                sub_sub_ul = f"<ul class='toc-subnested'>{''.join(sub_plot_links)}</ul>" if sub_plot_links else ""
-                cat_toc_links.append(f"<li><a href='#{cat_block_id}'>{grp['col_name']}</a>{sub_sub_ul}</li>")
-
-            sec_html += "</div></div>" # close nested-group-container and section-card
-            body_sections_html += sec_html
-
-            toc_nested_ul = f"<ul class='toc-nested'>{''.join(cat_toc_links)}</ul>" if cat_toc_links else ""
-            toc_items.append(f"<li><a href='#{sec_id}'>NMF Group Statistics</a>{toc_nested_ul}</li>")
-
-        # Additional Sub-Plots
-        if selected_sub_plots:
-            sec_id = "sec-additional-subplots"
-            sub_links = []
-            sec_html = f"<div class='section-card' id='{sec_id}'>"
-            sec_html += "<h2 class='section-title'>Additional Pipeline Sub-Plots</h2>"
-
-            for it in selected_sub_plots:
-                plot_key = f"sub_{it['id']}"
-                div_html = divs.get(plot_key, "")
-                card_id = f"card-{it['id']}"
-                sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
-
-                caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it['caption'] else ""
-                sec_html += f"""
-                <div class="plot-card" id="{card_id}">
-                    <h3 class="plot-title">{it['title']}</h3>
-                    <div class="plot-container">{div_html}</div>
-                    {caption_html}
+            body_sections_html = f"""
+            <div class="section-card" id="sec-report-figures">
+                <h2 class="section-title">Report Figures & Tables</h2>
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    {outline_cards_html}
                 </div>
-                """
-            sec_html += "</div>"
-            body_sections_html += sec_html
-            sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
-            toc_items.append(f"<li><a href='#{sec_id}'>Additional Pipeline Sub-Plots</a>{sub_ul}</li>")
+            </div>
+            """
+            plot_count = len(active_outline)
+        else:
+            # Fallback category-grouped flow
+            for cat_name in ordered_cat_names:
+                items = categories_dict[cat_name]
+                sec_id = f"sec-{re.sub(r'[^a-zA-Z0-9_]', '-', cat_name.lower())}"
+                sub_links = []
+                sec_html = f"<div class='section-card' id='{sec_id}'>"
+                sec_html += f"<h2 class='section-title'>{cat_name}</h2>"
 
-        # External Custom Images
-        if self.custom_images:
-            sec_id = "sec-custom-images"
-            sub_links = []
-            sec_html = f"<div class='section-card' id='{sec_id}'>"
-            sec_html += "<h2 class='section-title'>External Figures & Images</h2>"
+                for it in items:
+                    card_id = f"card-{it['id']}"
+                    sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
+                    caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it.get("caption") else ""
 
-            for it in self.custom_images:
-                card_id = f"card-{it['id']}"
-                sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
-                caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it['caption'] else ""
-                sec_html += f"""
-                <div class="plot-card" id="{card_id}">
-                    <h3 class="plot-title">{it['title']}</h3>
-                    <div class="image-container">
-                        <img src="{it['data_uri']}" alt="{it['title']}" class="responsive-img" />
+                    if it.get("snr_data") is not None:
+                        snr_content = self._format_snr_html(it["snr_data"])
+                        sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        {snr_content}
+                        {caption_html}
                     </div>
-                    {caption_html}
-                </div>
-                """
-            sec_html += "</div>"
-            body_sections_html += sec_html
-            sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
-            toc_items.append(f"<li><a href='#{sec_id}'>External Figures & Images</a>{sub_ul}</li>")
+                    """
+                    elif it.get("alpha_table_data") is not None:
+                        alpha_content = self._format_alpha_div_table_html(it["alpha_table_data"])
+                        sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        {alpha_content}
+                        {caption_html}
+                    </div>
+                    """
+                    elif it.get("markov_table_data") is not None:
+                        markov_content = self._format_markov_table_html(it["markov_table_data"])
+                        sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        {markov_content}
+                        {caption_html}
+                    </div>
+                    """
+                    else:
+                        plot_key = f"std_{it['id']}"
+                        div_html = divs.get(plot_key, "")
+                        sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        <div class="plot-container">{div_html}</div>
+                        {caption_html}
+                    </div>
+                    """
+                sec_html += "</div>"
+                body_sections_html += sec_html
+
+                sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
+                toc_items.append(f"<li><a href='#{sec_id}'>{cat_name}</a>{sub_ul}</li>")
+
+            # Nested NMF Group Statistics Section
+            if selected_nmf_groups:
+                sec_id = "sec-nmf-group-statistics"
+                sec_html = f"<div class='section-card' id='{sec_id}'>"
+                sec_html += "<h2 class='section-title'>NMF Group Statistics</h2>"
+                sec_html += "<div class='nested-group-container'>"
+
+                cat_toc_links = []
+                for g_idx, grp in enumerate(selected_nmf_groups):
+                    safe_c = re.sub(r'[^a-zA-Z0-9_]', '_', grp["col_name"])
+                    cat_block_id = f"cat-block-{safe_c}-{g_idx}"
+                    groups_str = ", ".join([str(g) for g in grp.get("groups", [])])
+                    meta_sub = f"Differential analysis grouped by <code>{grp['col_name']}</code> ({len(grp.get('groups', []))} groups: {groups_str})" if groups_str else f"Differential analysis grouped by <code>{grp['col_name']}</code>"
+
+                    sec_html += f"""
+                    <div class="category-block" id="{cat_block_id}">
+                        <h3 class="category-title">{grp['title']}</h3>
+                        <p class="category-subtitle">{meta_sub}</p>
+                    """
+
+                    sub_plot_links = []
+
+                    # Recon
+                    if grp.get("recon_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_recon_{g_idx}"
+                        f_id = f"fig-{safe_c}-recon"
+                        sub_plot_links.append(f"<li><a href='#{f_id}'>Sample Reconstruction</a></li>")
+                        sec_html += f"""
+                        <div class="plot-card" id="{f_id}">
+                            <h4 class="plot-title">Sample Reconstruction by Group: {grp['col_name']} (asinh)</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>
+                        """
+
+                    # Significance (q-value)
+                    if grp.get("sig_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_sig_{g_idx}"
+                        f_id = f"fig-{safe_c}-sig"
+                        sub_plot_links.append(f"<li><a href='#{f_id}'>Basis Significance (q-value)</a></li>")
+                        sec_html += f"""
+                        <div class="plot-card" id="{f_id}">
+                            <h4 class="plot-title">NMF Basis Significance: {grp['col_name']} (q-value)</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>
+                        """
+
+                    # Significance (p-value)
+                    if grp.get("pval_fig") is not None:
+                        k = f"nmf_grp_{safe_c}_pval_{g_idx}"
+                        f_id = f"fig-{safe_c}-pval"
+                        sub_plot_links.append(f"<li><a href='#{f_id}'>Basis Significance (p-value)</a></li>")
+                        sec_html += f"""
+                        <div class="plot-card" id="{f_id}">
+                            <h4 class="plot-title">NMF Basis Significance: {grp['col_name']} (p-value)</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>
+                        """
+
+                    # Basis Loadings Jitter
+                    for b_name in grp.get("jitter_figs", {}):
+                        safe_b = re.sub(r'[^a-zA-Z0-9_]', '_', b_name)
+                        k = f"nmf_grp_{safe_c}_jitter_{safe_b}_{g_idx}"
+                        f_id = f"fig-{safe_c}-jitter-{safe_b}"
+                        sub_plot_links.append(f"<li><a href='#{f_id}'>Loadings: {b_name}</a></li>")
+                        sec_html += f"""
+                        <div class="plot-card" id="{f_id}">
+                            <h4 class="plot-title">Basis Loadings by Group: {b_name} ({grp['col_name']})</h4>
+                            <div class="plot-container">{divs.get(k, '')}</div>
+                        </div>
+                        """
+
+                    sec_html += "</div>"
+
+                    sub_sub_ul = f"<ul class='toc-subnested'>{''.join(sub_plot_links)}</ul>" if sub_plot_links else ""
+                    cat_toc_links.append(f"<li><a href='#{cat_block_id}'>{grp['col_name']}</a>{sub_sub_ul}</li>")
+
+                sec_html += "</div></div>"
+                body_sections_html += sec_html
+
+                toc_nested_ul = f"<ul class='toc-nested'>{''.join(cat_toc_links)}</ul>" if cat_toc_links else ""
+                toc_items.append(f"<li><a href='#{sec_id}'>NMF Group Statistics</a>{toc_nested_ul}</li>")
+
+            # Additional Sub-Plots
+            if selected_sub_plots:
+                sec_id = "sec-additional-subplots"
+                sub_links = []
+                sec_html = f"<div class='section-card' id='{sec_id}'>"
+                sec_html += "<h2 class='section-title'>Additional Pipeline Sub-Plots</h2>"
+
+                for it in selected_sub_plots:
+                    plot_key = f"sub_{it['id']}"
+                    div_html = divs.get(plot_key, "")
+                    card_id = f"card-{it['id']}"
+                    sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
+
+                    caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it['caption'] else ""
+                    sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        <div class="plot-container">{div_html}</div>
+                        {caption_html}
+                    </div>
+                    """
+                sec_html += "</div>"
+                body_sections_html += sec_html
+                sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
+                toc_items.append(f"<li><a href='#{sec_id}'>Additional Pipeline Sub-Plots</a>{sub_ul}</li>")
+
+            # External Custom Images
+            if self.custom_images:
+                sec_id = "sec-custom-images"
+                sub_links = []
+                sec_html = f"<div class='section-card' id='{sec_id}'>"
+                sec_html += "<h2 class='section-title'>External Figures & Images</h2>"
+
+                for it in self.custom_images:
+                    card_id = f"card-{it['id']}"
+                    sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
+                    caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it['caption'] else ""
+                    sec_html += f"""
+                    <div class="plot-card" id="{card_id}">
+                        <h3 class="plot-title">{it['title']}</h3>
+                        <div class="image-container">
+                            <img src="{it['data_uri']}" alt="{it['title']}" class="responsive-img" />
+                        </div>
+                        {caption_html}
+                    </div>
+                    """
+                sec_html += "</div>"
+                body_sections_html += sec_html
+                sub_ul = f"<ul class='toc-sublist'>{''.join(sub_links)}</ul>" if sub_links else ""
+                toc_items.append(f"<li><a href='#{sec_id}'>External Figures & Images</a>{sub_ul}</li>")
+
+            plot_count = total_items
 
         # Table of Contents HTML
         toc_html = ""

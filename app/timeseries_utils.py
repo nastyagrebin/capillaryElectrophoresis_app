@@ -119,11 +119,46 @@ class TimeSeriesController:
         self.markov_show_text = pn.widgets.Checkbox(name="Show text on heatmaps", value=True)
         self.markov_btn = pn.widgets.Button(name="Run Markov Analysis", button_type="primary")
         self.markov_btn.on_click(self._on_markov_run)
-        self.markov_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
-        self.markov_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.markov_caption = pn.widgets.TextInput(placeholder="General Markov caption...", value="", width=220)
+        self.markov_send_all_btn = pn.widgets.Button(name="Send All to HTML", button_type="primary", disabled=True, width=140)
         self.markov_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_send_btn = self.markov_send_all_btn
+        self.markov_send_all_btn.on_click(self._on_send_markov_all_to_html)
+
+        # Artifact storage & individual send controls
         self.last_markov_fig = None
-        self.markov_send_btn.on_click(self._on_send_markov_to_html)
+        self.last_markov_prob_fig = None
+        self.last_markov_net_fig = None
+        self.last_markov_table_df = None
+        self.last_markov_cov_fig = None
+        self.last_markov_forest_fig = None
+        self.last_markov_interpretation = ""
+
+        self.markov_prob_caption = pn.widgets.TextInput(placeholder="Probabilities caption...", value="", width=240)
+        self.markov_prob_send_btn = pn.widgets.Button(name="Send Probabilities to HTML", button_type="default", disabled=True, width=190)
+        self.markov_prob_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_prob_send_btn.on_click(self._on_send_markov_prob_to_html)
+
+        self.markov_net_caption = pn.widgets.TextInput(placeholder="Network caption...", value="", width=240)
+        self.markov_net_send_btn = pn.widgets.Button(name="Send Network to HTML", button_type="default", disabled=True, width=170)
+        self.markov_net_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_net_send_btn.on_click(self._on_send_markov_net_to_html)
+
+        self.markov_table_caption = pn.widgets.TextInput(placeholder="Table caption...", value="", width=240)
+        self.markov_table_send_btn = pn.widgets.Button(name="Send Table to HTML", button_type="default", disabled=True, width=160)
+        self.markov_table_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_table_send_btn.on_click(self._on_send_markov_table_to_html)
+
+        self.markov_cov_caption = pn.widgets.TextInput(placeholder="Covariate heatmap caption...", value="", width=240)
+        self.markov_cov_send_btn = pn.widgets.Button(name="Send Heatmap to HTML", button_type="default", disabled=True, width=170)
+        self.markov_cov_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_cov_send_btn.on_click(self._on_send_markov_cov_to_html)
+
+        self.markov_forest_caption = pn.widgets.TextInput(placeholder="Forest plot caption...", value="", width=240)
+        self.markov_forest_send_btn = pn.widgets.Button(name="Send Forest Plot to HTML", button_type="default", disabled=True, width=170)
+        self.markov_forest_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.markov_forest_send_btn.on_click(self._on_send_markov_forest_to_html)
+
         self.markov_status = pn.pane.Markdown("")
         self.markov_results_container = pn.Column(sizing_mode="stretch_width")
         self.markov_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=250, sizing_mode="stretch_width", visible=False)
@@ -1113,10 +1148,22 @@ class TimeSeriesController:
         p2.circle(node_x, node_y, size=80, color="lightblue", line_color="black")
         p2.text(x=node_x, y=node_y, text=states_capped, text_align="center", text_baseline="middle", text_font_style="bold", text_font_size="10pt")
                 
-        plot_col = pn.Column(pn.pane.Bokeh(p), pn.pane.Bokeh(p2))
+        plot_col = pn.Column(
+            pn.Row(self.markov_prob_caption, self.markov_prob_send_btn, self.markov_prob_send_status),
+            pn.pane.Bokeh(p),
+            pn.layout.Divider(),
+            pn.Row(self.markov_net_caption, self.markov_net_send_btn, self.markov_net_send_status),
+            pn.pane.Bokeh(p2),
+            sizing_mode="stretch_width"
+        )
         self.markov_results_container.append(plot_col)
+        self.last_markov_prob_fig = p
+        self.last_markov_net_fig = p2
         self.last_markov_fig = p
+        self.markov_prob_send_btn.disabled = False
+        self.markov_net_send_btn.disabled = False
         self.markov_send_btn.disabled = False
+        self.markov_send_all_btn.disabled = False
         
         # 2. Covariate Statistical Analysis
         if cov_col == "None":
@@ -1379,22 +1426,43 @@ class TimeSeriesController:
                         p3.output_backend = "svg"
                         p4.output_backend = "svg"
                         
-                    viz_row = pn.Row(pn.pane.Bokeh(p3), pn.pane.Bokeh(p4))
+                    self.last_markov_forest_fig = p4
+                    self.markov_forest_send_btn.disabled = False
+                    cov_viz_col = pn.Column(
+                        pn.Row(self.markov_cov_caption, self.markov_cov_send_btn, self.markov_cov_send_status),
+                        pn.pane.Bokeh(p3),
+                        pn.layout.Divider(),
+                        pn.Row(self.markov_forest_caption, self.markov_forest_send_btn, self.markov_forest_send_status),
+                        pn.pane.Bokeh(p4),
+                        sizing_mode="stretch_width"
+                    )
                 else:
                     if self.markov_svg_export.value:
                         p3.output_backend = "svg"
-                    viz_row = pn.Row(pn.pane.Bokeh(p3))
+                    self.last_markov_forest_fig = None
+                    self.markov_forest_send_btn.disabled = True
+                    cov_viz_col = pn.Column(
+                        pn.Row(self.markov_cov_caption, self.markov_cov_send_btn, self.markov_cov_send_status),
+                        pn.pane.Bokeh(p3),
+                        sizing_mode="stretch_width"
+                    )
                     
+                self.last_markov_table_df = res_df
+                self.last_markov_interpretation = interpretation
+                self.last_markov_cov_fig = p3
+                self.markov_table_send_btn.disabled = False
+                self.markov_cov_send_btn.disabled = False
                 self.markov_status.object += "<br>[OK] Covariate Heatmap and Forest Plot successfully rendered."
             except Exception as e:
-                viz_row = pn.pane.Markdown(f"**Error plotting covariate visuals:** {str(e)}")
+                cov_viz_col = pn.pane.Markdown(f"**Error plotting covariate visuals:** {str(e)}")
                 self.markov_status.object += f"<br>[Error] Error plotting visuals: {str(e)}"
                 
             table_col = pn.Column(
                 pn.pane.Markdown(interpretation, sizing_mode="stretch_width"),
+                pn.Row(self.markov_table_caption, self.markov_table_send_btn, self.markov_table_send_status),
                 pn.widgets.Tabulator(res_df, sizing_mode="stretch_width", height=300, pagination=None, show_index=False),
                 pn.pane.Markdown("### Covariate Visualizations", sizing_mode="stretch_width"),
-                viz_row,
+                cov_viz_col,
                 sizing_mode="stretch_width"
             )
             self.markov_results_container.append(table_col)
@@ -1455,21 +1523,125 @@ class TimeSeriesController:
         }
         self._send_plot_to_html(entry, self.change_send_status)
 
-    def _on_send_markov_to_html(self, _=None):
-        if self.last_markov_fig is None:
+    def _on_send_markov_prob_to_html(self, _=None):
+        if self.last_markov_prob_fig is None:
             return
         import re
         state_col = str(self.markov_state.value or "State")
         title = f"Markov Transition Probabilities ({state_col})"
+        cap = self.markov_prob_caption.value.strip() or self.markov_caption.value.strip()
         entry = {
-            "id": f"ts_markov_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}",
-            "type": "ts_markov",
+            "id": f"ts_markov_prob_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}",
+            "type": "ts_markov_prob",
             "category": "Time Series & Pseudotime",
             "title": title,
-            "figure": self.last_markov_fig,
-            "caption": self.markov_caption.value.strip() if self.markov_caption.value else ""
+            "figure": self.last_markov_prob_fig,
+            "caption": cap
         }
-        self._send_plot_to_html(entry, self.markov_send_status)
+        self._send_plot_to_html(entry, self.markov_prob_send_status)
+
+    def _on_send_markov_net_to_html(self, _=None):
+        if self.last_markov_net_fig is None:
+            return
+        import re
+        state_col = str(self.markov_state.value or "State")
+        title = f"Markov Transition Network ({state_col})"
+        cap = self.markov_net_caption.value.strip() or self.markov_caption.value.strip()
+        entry = {
+            "id": f"ts_markov_net_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}",
+            "type": "ts_markov_net",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_markov_net_fig,
+            "caption": cap
+        }
+        self._send_plot_to_html(entry, self.markov_net_send_status)
+
+    def _on_send_markov_table_to_html(self, _=None):
+        if self.last_markov_table_df is None or self.last_markov_table_df.empty:
+            return
+        import re
+        state_col = str(self.markov_state.value or "State")
+        cov_col = str(self.markov_cov.value or "Covariate")
+        title = f"Markov Covariate Analysis Table ({state_col} ~ {cov_col})"
+        cap = self.markov_table_caption.value.strip() or self.markov_caption.value.strip()
+        entry = {
+            "id": f"ts_markov_table_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', cov_col)}",
+            "type": "markov_table",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": None,
+            "markov_table_data": {
+                "df": self.last_markov_table_df.copy(),
+                "interpretation": self.last_markov_interpretation,
+                "state_col": state_col,
+                "cov_col": cov_col
+            },
+            "caption": cap
+        }
+        self._send_plot_to_html(entry, self.markov_table_send_status)
+
+    def _on_send_markov_cov_to_html(self, _=None):
+        if self.last_markov_cov_fig is None:
+            return
+        import re
+        state_col = str(self.markov_state.value or "State")
+        cov_col = str(self.markov_cov.value or "Covariate")
+        title = f"Markov Covariate Heatmap ({state_col} ~ {cov_col})"
+        cap = self.markov_cov_caption.value.strip() or self.markov_caption.value.strip()
+        entry = {
+            "id": f"ts_markov_cov_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', cov_col)}",
+            "type": "ts_markov_cov",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_markov_cov_fig,
+            "caption": cap
+        }
+        self._send_plot_to_html(entry, self.markov_cov_send_status)
+
+    def _on_send_markov_forest_to_html(self, _=None):
+        if self.last_markov_forest_fig is None:
+            return
+        import re
+        state_col = str(self.markov_state.value or "State")
+        cov_col = str(self.markov_cov.value or "Covariate")
+        title = f"Markov Odds Ratio Forest Plot ({state_col} ~ {cov_col})"
+        cap = self.markov_forest_caption.value.strip() or self.markov_caption.value.strip()
+        entry = {
+            "id": f"ts_markov_forest_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', cov_col)}",
+            "type": "ts_markov_forest",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_markov_forest_fig,
+            "caption": cap
+        }
+        self._send_plot_to_html(entry, self.markov_forest_send_status)
+
+    def _on_send_markov_all_to_html(self, _=None):
+        sent_items = []
+        if self.last_markov_prob_fig is not None:
+            self._on_send_markov_prob_to_html()
+            sent_items.append("Probabilities")
+        if self.last_markov_net_fig is not None:
+            self._on_send_markov_net_to_html()
+            sent_items.append("Network")
+        if self.last_markov_table_df is not None and not self.last_markov_table_df.empty:
+            self._on_send_markov_table_to_html()
+            sent_items.append("Table")
+        if self.last_markov_cov_fig is not None:
+            self._on_send_markov_cov_to_html()
+            sent_items.append("Covariate Heatmap")
+        if self.last_markov_forest_fig is not None:
+            self._on_send_markov_forest_to_html()
+            sent_items.append("Forest Plot")
+
+        if sent_items:
+            self.markov_send_status.object = f"**Sent {len(sent_items)} Markov outputs to HTML export ({', '.join(sent_items)}).**"
+        else:
+            self.markov_send_status.object = "**No Markov outputs available to send.**"
+
+    def _on_send_markov_to_html(self, _=None):
+        return self._on_send_markov_all_to_html(_)
 
 def build_timeseries_section():
     ctrl = TimeSeriesController()

@@ -895,11 +895,13 @@ class VizController:
         if self.last_pca_fig is None:
             return
         fig = self.last_pca_fig
-        fig.frame_width = 450
-        fig.frame_height = 450
-        fig.match_aspect = True
-        fig.aspect_ratio = 1.0
+        fig.frame_width = 400
+        fig.frame_height = 400
+        fig.match_aspect = False
+        fig.aspect_ratio = None
         fig.sizing_mode = None
+        fig.width = None
+        fig.height = None
         pcx = int(self.pca_x.value)
         pcy = int(self.pca_y.value)
         title = f"PCA of NMF loadings (PC{pcx} vs PC{pcy})"
@@ -917,11 +919,13 @@ class VizController:
         if self.last_pls_fig is None:
             return
         fig = self.last_pls_fig
-        fig.frame_width = 450
-        fig.frame_height = 450
-        fig.match_aspect = True
-        fig.aspect_ratio = 1.0
+        fig.frame_width = 400
+        fig.frame_height = 400
+        fig.match_aspect = False
+        fig.aspect_ratio = None
         fig.sizing_mode = None
+        fig.width = None
+        fig.height = None
         lv_x = int(self.pls_x.value)
         lv_y = int(self.pls_y.value)
         title = f"PLS-DA of NMF loadings (LV{lv_x} vs LV{lv_y})"
@@ -966,11 +970,13 @@ class VizController:
         if self.last_mds_fig is None:
             return
         fig = self.last_mds_fig
-        fig.frame_width = 450
-        fig.frame_height = 450
-        fig.match_aspect = True
-        fig.aspect_ratio = 1.0
+        fig.frame_width = 400
+        fig.frame_height = 400
+        fig.match_aspect = False
+        fig.aspect_ratio = None
         fig.sizing_mode = None
+        fig.width = None
+        fig.height = None
         metric = str(self.mds_metric.value)
         entry = {
             "id": f"viz_mds_{metric}",
@@ -986,11 +992,13 @@ class VizController:
         if self.last_tsne_fig is None:
             return
         fig = self.last_tsne_fig
-        fig.frame_width = 450
-        fig.frame_height = 450
-        fig.match_aspect = True
-        fig.aspect_ratio = 1.0
+        fig.frame_width = 400
+        fig.frame_height = 400
+        fig.match_aspect = False
+        fig.aspect_ratio = None
         fig.sizing_mode = None
+        fig.width = None
+        fig.height = None
         metric = str(self.tsne_metric.value)
         perp = float(self.tsne_perp.value)
         entry = {
