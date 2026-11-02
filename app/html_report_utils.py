@@ -451,6 +451,53 @@ def compute_nmf_group_figures(
     }
 
 
+def attach_interactive_offset_slider(fig: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
+    """Attach a client-side Bokeh Slider to a multi-trace plot with CustomJS to interactively adjust vertical offset."""
+    if not hasattr(fig, "renderers"):
+        return fig
+
+    sources = []
+    idx = 0
+    for r in fig.renderers:
+        if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
+            if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
+                src = r.data_source
+                y_curr = np.array(src.data["y"], dtype=float)
+                y_base = y_curr + idx * initial_offset
+                src.data["y_base"] = y_base
+                src.data["sample_idx"] = [idx] * len(y_base)
+                sources.append(src)
+                idx += 1
+
+    if not sources:
+        return fig
+
+    slider = bokeh.models.Slider(
+        title="Interactive Vertical Offset",
+        start=0.0,
+        end=max_offset,
+        step=step,
+        value=initial_offset,
+        sizing_mode="stretch_width"
+    )
+    cb = bokeh.models.CustomJS(args=dict(sources=sources), code="""
+        const val = cb_obj.value;
+        for (let i = 0; i < sources.length; i++) {
+            const src = sources[i];
+            const idx = src.data['sample_idx'][0];
+            const y_base = src.data['y_base'];
+            const new_y = [];
+            for (let j = 0; j < y_base.length; j++) {
+                new_y.push(y_base[j] - idx * val);
+            }
+            src.data['y'] = new_y;
+            src.change.emit();
+        }
+    """)
+    slider.js_on_change("value", cb)
+    return bokeh.layouts.column(slider, fig, sizing_mode="stretch_width")
+
+
 class HTMLReportController:
     """Controller for the HTML Report Export tab."""
 
@@ -1803,53 +1850,6 @@ class HTMLReportController:
             html_content, _ = self._compile_html_document()
             self._current_html_str = html_content
         return io.BytesIO(self._current_html_str.encode("utf-8"))
-
-def attach_interactive_offset_slider(fig: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
-    """Attach a client-side Bokeh Slider to a multi-trace plot with CustomJS to interactively adjust vertical offset."""
-    if not hasattr(fig, "renderers"):
-        return fig
-
-    sources = []
-    idx = 0
-    for r in fig.renderers:
-        if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
-            if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
-                src = r.data_source
-                y_curr = np.array(src.data["y"], dtype=float)
-                y_base = y_curr + idx * initial_offset
-                src.data["y_base"] = y_base
-                src.data["sample_idx"] = [idx] * len(y_base)
-                sources.append(src)
-                idx += 1
-
-    if not sources:
-        return fig
-
-    slider = bokeh.models.Slider(
-        title="Interactive Vertical Offset",
-        start=0.0,
-        end=max_offset,
-        step=step,
-        value=initial_offset,
-        sizing_mode="stretch_width"
-    )
-    cb = bokeh.models.CustomJS(args=dict(sources=sources), code="""
-        const val = cb_obj.value;
-        for (let i = 0; i < sources.length; i++) {
-            const src = sources[i];
-            const idx = src.data['sample_idx'][0];
-            const y_base = src.data['y_base'];
-            const new_y = [];
-            for (let j = 0; j < y_base.length; j++) {
-                new_y.push(y_base[j] - idx * val);
-            }
-            src.data['y'] = new_y;
-            src.change.emit();
-        }
-    """)
-    slider.js_on_change("value", cb)
-    return bokeh.layouts.column(slider, fig, sizing_mode="stretch_width")
-
 
     def _compile_html_document(self) -> Tuple[str, int]:
         """Compile selected standard plots, nested NMF group sections, subplots, custom images, and parameters into HTML."""
