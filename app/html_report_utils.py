@@ -879,6 +879,13 @@ class HTMLReportController:
                 "getter": lambda: self._get_plot_ts_trajectories(),
                 "default_selected": False
             },
+            {
+                "id": "ts_change",
+                "category": "Time Series & Pseudotime",
+                "default_title": "Timepoint Change by Category",
+                "getter": lambda: self._get_plot_ts_change(),
+                "default_selected": False
+            },
         ]
 
     # ---------------- Plot Getters from Controllers ----------------
@@ -1018,8 +1025,16 @@ class HTMLReportController:
     def _get_plot_ts_trajectories(self):
         ctrl = self.controllers.get("timeseries")
         if not ctrl: return None
-        fig = extract_bokeh_figure(getattr(ctrl, "trajectories_plot_pane", None))
+        fig = extract_bokeh_figure(getattr(ctrl, "plot_pane", None))
+        if fig is None:
+            fig = extract_bokeh_figure(getattr(ctrl, "trajectories_plot_pane", None))
         return fig or getattr(ctrl, "last_traj_fig", None)
+
+    def _get_plot_ts_change(self):
+        ctrl = self.controllers.get("timeseries")
+        if not ctrl: return None
+        fig = extract_bokeh_figure(getattr(ctrl, "change_plot_pane", None))
+        return fig or getattr(ctrl, "last_change_fig", None)
 
     # ---------------- Data Extraction Helpers ----------------
     def _get_nmf_and_meta_data(self) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], str, Tuple[float, float]]:

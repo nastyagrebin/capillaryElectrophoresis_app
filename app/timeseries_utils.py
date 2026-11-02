@@ -1,13 +1,28 @@
 import io
+import itertools
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
-from scipy.stats import chi2_contingency, fisher_exact, mannwhitneyu
+from scipy.stats import chi2_contingency, fisher_exact, mannwhitneyu, kruskal
 import panel as pn
 from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper, ColorBar
+from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper, ColorBar, Range1d, Span
 from bokeh.palettes import Category10, Magma256
+
+def fdr_bh(pvals):
+    pvals = np.asarray(pvals, dtype=float)
+    n = len(pvals)
+    if n == 0: return pvals
+    sorted_idx = np.argsort(pvals)
+    sorted_pvals = pvals[sorted_idx]
+    qvals = np.zeros(n)
+    qvals[-1] = sorted_pvals[-1]
+    for i in range(n-2, -1, -1):
+        qvals[i] = min(qvals[i+1], sorted_pvals[i] * n / (i + 1))
+    orig_qvals = np.zeros(n)
+    orig_qvals[sorted_idx] = qvals
+    return orig_qvals
 
 class TimeSeriesController:
     def __init__(self):
@@ -42,6 +57,33 @@ class TimeSeriesController:
         self.ts_color = pn.widgets.Select(name="Color by (Categorical)", options=[], width=150)
         
         self.plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=600)
+        self.last_traj_fig = None
+
+        # Timepoint Change Sub-plot UI (Section 3)
+        self.enable_change_plot = pn.widgets.Checkbox(name="Enable Timepoint Change Sub-Plot", value=False)
+        self.change_t_a = pn.widgets.Select(name="Timepoint A (Baseline)", options=[], width=170)
+        self.change_t_b = pn.widgets.Select(name="Timepoint B (Comparison)", options=[], width=170)
+        self.change_cat_timing = pn.widgets.Select(name="Category X-axis Timing", options=["Timepoint B", "Timepoint A"], value="Timepoint B", width=180)
+        self.change_stat = pn.widgets.RadioButtonGroup(name="Stat Test", options=["Mann-Whitney", "Kruskal-Wallis"], value="Mann-Whitney")
+        self.change_fdr = pn.widgets.Checkbox(name="FDR Correction (BH)", value=True)
+        self.change_plot_warning = pn.pane.Markdown("", visible=False)
+        self.change_plot_status = pn.pane.Markdown("", visible=False)
+        self.change_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=480, visible=False)
+        self.last_change_fig = None
+
+        self.change_plot_controls_row = pn.Row(self.change_t_a, self.change_t_b, self.change_cat_timing, visible=False)
+        self.change_plot_stat_row = pn.Row(pn.Column("Significance Test:", self.change_stat), pn.Column("Correction:", self.change_fdr), visible=False)
+        self.change_plot_section = pn.Column(
+            pn.layout.Divider(),
+            pn.pane.Markdown("#### Timepoint Change Sub-Plot"),
+            pn.Row(self.enable_change_plot),
+            self.change_plot_warning,
+            self.change_plot_controls_row,
+            self.change_plot_stat_row,
+            self.change_plot_pane,
+            self.change_plot_status,
+            sizing_mode="stretch_width"
+        )
         
         # Markov UI
         self.markov_state = pn.widgets.Select(name="State Variable", options=[], width=150)
@@ -87,6 +129,17 @@ class TimeSeriesController:
         self.slice_add_btn.on_click(self._add_rule)
         self.slice_clear_btn.on_click(self._clear_rules)
         self.slice_apply_btn.on_click(self._apply_slicing)
+
+        # Timepoint change sub-plot watchers
+        self.enable_change_plot.param.watch(self._update_change_ui_visibility, 'value')
+        self.ts_x.param.watch(lambda *_: self._on_ts_x_change(), 'value')
+        self.ts_x_order.param.watch(lambda *_: self._update_change_timepoint_options(), 'value')
+        self.ts_color.param.watch(lambda *_: self._on_color_change(), 'value')
+        self.change_t_a.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_t_b.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_cat_timing.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_stat.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_fdr.param.watch(lambda *_: self._render_change_plot(), 'value')
         
         self.section = pn.Column(
             pn.pane.Markdown("## Time Series Plot\nUpload standalone files, or let the session automatically bridge generated data here."),
@@ -110,6 +163,7 @@ class TimeSeriesController:
             pn.Row(self.ts_y, self.ts_y_mode, self.ts_patient, self.ts_color),
             pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn),
             self.plot_pane,
+            self.change_plot_section,
             pn.layout.Divider(),
             pn.pane.Markdown("### 4. Markov State Transitions"),
             pn.Row(self.markov_patient, self.markov_time, pn.Column("Time variable type:", self.markov_time_type), self.markov_time_order),
@@ -121,6 +175,7 @@ class TimeSeriesController:
 
     def _toggle_x_order(self, event):
         self.ts_x_order.visible = (self.ts_x_type.value == "Categorical")
+        self._update_change_ui_visibility()
         
     def _toggle_markov_time_order(self, event):
         self.markov_time_order.visible = (self.markov_time_type.value == "Categorical")
@@ -282,6 +337,7 @@ class TimeSeriesController:
             self.ts_y.value = cols[0]
             self.ts_patient.value = cols[0]
         self._update_slicing_ui()
+        self._update_change_timepoint_options()
 
     def _on_visualize(self, event):
         self.plot_pane.object = None
@@ -495,11 +551,305 @@ class TimeSeriesController:
             line_hover = HoverTool(renderers=[lines_renderer], tooltips=[("Patient", "@patient")], callback=callback, mode='mouse')
             p_fig.add_tools(line_hover)
 
+        self.last_traj_fig = p_fig
         self.plot_pane.object = p_fig
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
         apply_export_prefix_to_pane(self.plot_pane, prefix)
         self.status.object = "Plot updated."
+        if self.enable_change_plot.value:
+            self._render_change_plot()
+
+    def _on_ts_x_change(self):
+        self._update_change_timepoint_options()
+        if self.enable_change_plot.value:
+            self._render_change_plot()
+
+    def _on_color_change(self):
+        self._update_change_ui_visibility()
+        if self.enable_change_plot.value:
+            self._render_change_plot()
+
+    def _on_enable_change_plot_change(self, event):
+        self._update_change_ui_visibility()
+        if event.new:
+            self._update_change_timepoint_options()
+            self._render_change_plot()
+
+    def _update_change_ui_visibility(self, event=None):
+        enabled = self.enable_change_plot.value
+        is_cat = (self.ts_x_type.value == "Categorical")
+        
+        self.change_plot_controls_row.visible = (enabled and is_cat)
+        self.change_plot_stat_row.visible = (enabled and is_cat)
+        self.change_plot_pane.visible = (enabled and is_cat)
+        self.change_plot_status.visible = (enabled and is_cat)
+        
+        if enabled and not is_cat:
+            self.change_plot_warning.object = "*Note: Timepoint change sub-plot requires a Categorical time variable. Please set 'Time variable type' to 'Categorical' above.*"
+            self.change_plot_warning.visible = True
+        elif enabled and self.ts_color.value == "None":
+            self.change_plot_warning.object = "*Note: Please select a 'Color by (Categorical)' variable above to use on the X-axis.*"
+            self.change_plot_warning.visible = True
+        else:
+            self.change_plot_warning.object = ""
+            self.change_plot_warning.visible = False
+
+    def _update_change_timepoint_options(self):
+        current_df = self._get_df()
+        if current_df is None or not self.ts_x.value or self.ts_x.value not in current_df.columns:
+            self.change_t_a.options = []
+            self.change_t_b.options = []
+            return
+
+        x_col = self.ts_x.value
+        user_order = [s.strip() for s in self.ts_x_order.value.split(",") if s.strip()]
+        unique_vals = list(current_df[x_col].dropna().astype(str).unique())
+
+        if user_order:
+            ordered_vals = [s for s in user_order if s in unique_vals]
+            for v in unique_vals:
+                if v not in ordered_vals:
+                    ordered_vals.append(v)
+            timepoints = ordered_vals
+        else:
+            timepoints = sorted(unique_vals)
+
+        self.change_t_a.options = timepoints
+        self.change_t_b.options = timepoints
+
+        if len(timepoints) >= 2:
+            if not self.change_t_a.value or self.change_t_a.value not in timepoints:
+                self.change_t_a.value = timepoints[0]
+            if not self.change_t_b.value or self.change_t_b.value not in timepoints:
+                self.change_t_b.value = timepoints[1]
+        elif len(timepoints) == 1:
+            self.change_t_a.value = timepoints[0]
+            self.change_t_b.value = timepoints[0]
+
+    def _render_change_plot(self):
+        self.change_plot_pane.object = None
+        self.last_change_fig = None
+        
+        if not self.enable_change_plot.value:
+            return
+            
+        if self.ts_x_type.value != "Categorical":
+            self.change_plot_status.object = "*Timepoint change sub-plot requires a Categorical time variable.*"
+            return
+            
+        current_df = self._get_df()
+        if current_df is None or current_df.empty:
+            return
+            
+        x_col = self.ts_x.value
+        y_col = self.ts_y.value
+        p_col = self.ts_patient.value
+        color_col = self.ts_color.value
+        
+        if not x_col or not y_col or not p_col:
+            return
+            
+        if color_col == "None":
+            self.change_plot_status.object = "*Please select a 'Color by (Categorical)' variable to use on the X-axis.*"
+            return
+            
+        t_a = str(self.change_t_a.value) if self.change_t_a.value else None
+        t_b = str(self.change_t_b.value) if self.change_t_b.value else None
+        
+        if not t_a or not t_b:
+            self.change_plot_status.object = "*Please select both Timepoint A and Timepoint B.*"
+            return
+            
+        if t_a == t_b:
+            self.change_plot_status.object = "*Timepoint A and Timepoint B must be different.*"
+            return
+
+        ref_timing = self.change_cat_timing.value
+        ref_t = t_b if ref_timing == "Timepoint B" else t_a
+
+        needed_cols = [x_col, y_col, p_col, color_col]
+        for c in needed_cols:
+            if c not in current_df.columns:
+                self.change_plot_status.object = f"*Column '{c}' not found in dataset.*"
+                return
+
+        sub_df = current_df[needed_cols].copy()
+        sub_df[x_col] = sub_df[x_col].astype(str)
+        sub_df[p_col] = sub_df[p_col].astype(str)
+        sub_df[color_col] = sub_df[color_col].astype(str)
+        sub_df[y_col] = pd.to_numeric(sub_df[y_col], errors='coerce')
+        sub_df = sub_df.dropna(subset=[y_col, p_col, x_col])
+
+        df_a = sub_df[sub_df[x_col] == t_a]
+        df_b = sub_df[sub_df[x_col] == t_b]
+
+        if df_a.empty or df_b.empty:
+            self.change_plot_status.object = f"*No valid samples found at timepoint '{t_a}' or '{t_b}'.*"
+            return
+
+        val_a = df_a.groupby(p_col)[y_col].mean()
+        val_b = df_b.groupby(p_col)[y_col].mean()
+
+        ref_df = df_b if ref_timing == "Timepoint B" else df_a
+        cat_map = ref_df.groupby(p_col)[color_col].first()
+
+        common_patients = val_a.index.intersection(val_b.index).intersection(cat_map.dropna().index)
+        if len(common_patients) == 0:
+            self.change_plot_status.object = f"*No overlapping patients found between '{t_a}' and '{t_b}' with valid '{color_col}'.*"
+            return
+
+        records = []
+        for p in common_patients:
+            ya = float(val_a.loc[p])
+            yb = float(val_b.loc[p])
+            dy = yb - ya
+            c_val = str(cat_map.loc[p])
+            records.append({
+                "patient": p,
+                "category": c_val,
+                "y_a": ya,
+                "y_b": yb,
+                "delta_y": dy
+            })
+
+        delta_df = pd.DataFrame(records)
+        groups = sorted(delta_df["category"].dropna().unique().tolist())
+        if len(groups) < 1:
+            self.change_plot_status.object = "*No valid categories found.*"
+            return
+
+        # Significance testing between categories
+        pairs = list(itertools.combinations(groups, 2)) if len(groups) >= 2 else []
+        pvals = []
+        for g1, g2 in pairs:
+            v1 = delta_df[delta_df["category"] == g1]["delta_y"].dropna().values
+            v2 = delta_df[delta_df["category"] == g2]["delta_y"].dropna().values
+            if len(v1) == 0 or len(v2) == 0:
+                pvals.append(1.0)
+                continue
+            if self.change_stat.value == "Mann-Whitney":
+                try:
+                    _, p = mannwhitneyu(v1, v2, alternative='two-sided')
+                except Exception:
+                    p = 1.0
+            else:
+                try:
+                    _, p = kruskal(v1, v2)
+                except Exception:
+                    p = 1.0
+            pvals.append(p)
+
+        if self.change_fdr.value and len(pvals) > 0:
+            pvals = fdr_bh(pvals)
+
+        def get_asterisks(p):
+            if p < 0.001: return "***"
+            if p < 0.01: return "**"
+            if p < 0.05: return "*"
+            return "n.s."
+
+        import math
+        import common_plot
+
+        title_str = f"Change in {y_col} ({t_b} - {t_a}) by {color_col} (at {ref_t})"
+        p_fig = figure(
+            width=800, height=480,
+            title=title_str,
+            x_axis_label=f"{color_col} (at {ref_t})",
+            y_axis_label=f"Change in {y_col} ({t_b} - {t_a})",
+            tools="pan,wheel_zoom,box_zoom,reset,save",
+            output_backend="svg" if self.svg_export.value else "canvas"
+        )
+
+        p_fig.xaxis.ticker = list(range(len(groups)))
+        p_fig.xaxis.major_label_overrides = {i: g for i, g in enumerate(groups)}
+        if any(len(str(g)) > 6 for g in groups):
+            p_fig.xaxis.major_label_orientation = math.pi / 4
+
+        zero_line = Span(location=0, dimension='width', line_dash='dashed', line_color='#94a3b8', line_width=1.5)
+        p_fig.add_layout(zero_line)
+
+        palette = common_plot._palette(len(groups)) if len(groups) > 1 else ["#2563eb"]
+
+        rng = np.random.default_rng(42)
+        circle_renderers = []
+        for i, g in enumerate(groups):
+            gdf = delta_df[delta_df["category"] == g].copy()
+            if gdf.empty:
+                continue
+            vals = gdf["delta_y"].values
+            n_pts = len(vals)
+            xs = i + rng.uniform(-0.15, 0.15, size=n_pts)
+            gdf["x_jitter"] = xs
+
+            src = ColumnDataSource(gdf)
+            col_color = palette[i % len(palette)]
+            r = p_fig.circle(
+                "x_jitter", "delta_y", size=8, alpha=0.8,
+                fill_color=col_color, line_color="#1e293b", line_width=1,
+                source=src, legend_label=str(g)[:15]
+            )
+            circle_renderers.append(r)
+
+            # Median bar
+            med = float(np.median(vals))
+            p_fig.line([i - 0.22, i + 0.22], [med, med], color='black', line_width=2.5)
+
+        hover = HoverTool(
+            renderers=circle_renderers,
+            tooltips=[
+                ("Patient", "@patient"),
+                ("Category", "@category"),
+                (f"Change ({t_b} - {t_a})", "@delta_y{0.000}"),
+                (f"Value at {t_a}", "@y_a{0.000}"),
+                (f"Value at {t_b}", "@y_b{0.000}")
+            ]
+        )
+        p_fig.add_tools(hover)
+
+        if p_fig.legend:
+            p_fig.legend.click_policy = "hide"
+            p_fig.legend.location = "top_left"
+            p_fig.legend.orientation = "horizontal"
+            p_fig.add_layout(p_fig.legend[0], "above")
+
+        min_y = float(delta_df["delta_y"].min())
+        max_y = float(delta_df["delta_y"].max())
+        y_span = max_y - min_y
+        if y_span == 0: y_span = 1.0
+        step = y_span * 0.12
+        current_y = max_y + step * 0.6
+
+        bracket_count = 0
+        for (g1, g2), p in zip(pairs, pvals):
+            ast = get_asterisks(p)
+            if ast == "n.s.":
+                continue
+            bracket_count += 1
+            i1 = groups.index(g1)
+            i2 = groups.index(g2)
+            p_fig.line(
+                [i1, i1, i2, i2],
+                [current_y - step * 0.25, current_y, current_y, current_y - step * 0.25],
+                color='black', line_width=1.5
+            )
+            p_fig.text(
+                x=[(i1 + i2) / 2], y=[current_y], text=[ast],
+                text_align="center", text_baseline="bottom"
+            )
+            current_y += step
+
+        y_bot = min(min_y - step * 0.5, -step * 0.2)
+        y_top = current_y + step * 0.4 if bracket_count > 0 else max_y + step * 0.6
+        p_fig.y_range = Range1d(start=y_bot, end=y_top)
+
+        self.last_change_fig = p_fig
+        self.change_plot_pane.object = p_fig
+        from common_plot import apply_export_prefix_to_pane
+        prefix = getattr(self, "export_prefix", "CE_analysis")
+        apply_export_prefix_to_pane(self.change_plot_pane, prefix)
+        self.change_plot_status.object = f"Rendered comparison of **{len(common_patients)}** patients across **{len(groups)}** categories."
 
 
     def _on_markov_run(self, event):
