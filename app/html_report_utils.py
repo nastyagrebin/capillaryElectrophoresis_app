@@ -499,17 +499,23 @@ def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float =
 
     sources = []
     for p in target_plots:
-        idx = 0
+        line_idx = 0
         for r in p.renderers:
             if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
-                if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
-                    src = r.data_source
+                src = r.data_source
+                if "sample_idx" in src.data and len(src.data["sample_idx"]) > 0:
+                    if "y_base" not in src.data or len(src.data["y_base"]) != len(src.data["y"]):
+                        idx = src.data["sample_idx"][0]
+                        y_curr = np.array(src.data["y"], dtype=float)
+                        src.data["y_base"] = y_curr + idx * initial_offset
+                    sources.append(src)
+                elif hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
                     y_curr = np.array(src.data["y"], dtype=float)
                     if "y_base" not in src.data or "sample_idx" not in src.data:
-                        src.data["y_base"] = y_curr + idx * initial_offset
-                        src.data["sample_idx"] = [idx] * len(y_curr)
+                        src.data["y_base"] = y_curr + line_idx * initial_offset
+                        src.data["sample_idx"] = [line_idx] * len(y_curr)
                     sources.append(src)
-                    idx += 1
+                    line_idx += 1
 
     if not sources:
         return fig_or_layout
@@ -526,6 +532,7 @@ def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float =
         const val = cb_obj.value;
         for (let i = 0; i < sources.length; i++) {
             const src = sources[i];
+            if (!src.data['sample_idx'] || src.data['sample_idx'].length === 0) continue;
             const idx = src.data['sample_idx'][0];
             const y_base = src.data['y_base'];
             const new_y = [];
@@ -1272,6 +1279,13 @@ class HTMLReportController:
         ctrl = self.controllers.get("alignment")
         if not ctrl:
             return None
+        if offset is not None and hasattr(ctrl, "offset_slider") and hasattr(ctrl, "_build_selection_figure"):
+            try:
+                ctrl.offset_slider.value = offset
+                ctrl._build_selection_figure()
+                ctrl._refresh_anchor_dots()
+            except Exception:
+                pass
         fig = extract_bokeh_figure(getattr(ctrl, "selection_pane", getattr(ctrl, "anchor_plot_pane", None)))
         return fig
 
@@ -1293,11 +1307,47 @@ class HTMLReportController:
 
     def _get_plot_nmf_recon(self):
         ctrl = self.controllers.get("nmf")
-        return extract_bokeh_figure(getattr(ctrl, "recon_plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        pane = getattr(ctrl, "recon_pane", getattr(ctrl, "recon_plot_pane", None))
+        fig = extract_bokeh_figure(pane)
+        if fig is not None:
+            return fig
+        if hasattr(ctrl, "last_recon_fig") and ctrl.last_recon_fig is not None:
+            return ctrl.last_recon_fig
+        if getattr(ctrl, "H_df", None) is not None and getattr(ctrl, "Phi", None) is not None:
+            try:
+                ctrl._render_recon_preview()
+                return extract_bokeh_figure(getattr(ctrl, "recon_pane", None))
+            except Exception:
+                pass
+        return None
 
     def _get_plot_nmf_heatmap(self):
         ctrl = self.controllers.get("nmf")
-        return extract_bokeh_figure(getattr(ctrl, "heatmap_plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        pane = getattr(ctrl, "heatmap_pane", getattr(ctrl, "heatmap_plot_pane", None))
+        fig = extract_bokeh_figure(pane)
+        if fig is not None:
+            return fig
+        if hasattr(ctrl, "last_heatmap_fig") and ctrl.last_heatmap_fig is not None:
+            return ctrl.last_heatmap_fig
+        H_df = getattr(ctrl, "H_df", None)
+        if H_df is not None and not H_df.empty:
+            try:
+                import CEtools as cet
+                from common_plot import get_continuous_palette
+                cmap = get_continuous_palette(256)
+                centers = getattr(ctrl, "centers", None)
+                if centers is not None:
+                    _, _, _, fig = cet.plot_loadings_heatmap_clustered_bokeh(H_df, centers=centers, title="NMF loadings (clustered rows)", cmap=cmap)
+                else:
+                    fig, _ = cet.plot_loadings_heatmap_bokeh(H_df, cmap=cmap)
+                return fig
+            except Exception:
+                pass
+        return None
 
     def _get_plot_nmf_reg_matrix(self):
         ctrl = self.controllers.get("nmf_meta")

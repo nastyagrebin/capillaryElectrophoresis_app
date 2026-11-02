@@ -258,12 +258,14 @@ class NMFController:
             try: fig.toolbar.active_scroll = None
             except Exception: pass
             self.recon_pane.object = fig
+            self.last_recon_fig = fig
             from common_plot import apply_export_prefix_to_pane
             prefix = getattr(self, "export_prefix", "CE_analysis")
             apply_export_prefix_to_pane(self.recon_pane, prefix)
             self.status.object = ok("Preview updated.")
         except Exception as e:
             self.recon_pane.object = None
+            self.last_recon_fig = None
             self.status.object = warn(f"Preview failed: {e}")
 
     def _on_calculate(self, _=None):
@@ -302,17 +304,24 @@ class NMFController:
             try: fig.toolbar.active_scroll = None
             except Exception: pass
             self.heatmap_pane.object = fig
+            self.last_heatmap_fig = fig
             from common_plot import apply_export_prefix_to_pane
             prefix = getattr(self, "export_prefix", "CE_analysis")
             apply_export_prefix_to_pane(self.heatmap_pane, prefix)
 
             self.csv_download.disabled = False
             self.status.object = ok("NMF loadings calculated.")
+            if self.recon_pane.object is None:
+                try:
+                    self._render_recon_preview()
+                except Exception:
+                    pass
             if callable(self.on_done):
                 try: self.on_done(self.H_df, self.centers)
                 except Exception: pass
         except Exception as e:
             self.heatmap_pane.object = None
+            self.last_heatmap_fig = None
             self.csv_download.disabled = True
             self.status.object = warn(f"NMF failed: {e}")
 

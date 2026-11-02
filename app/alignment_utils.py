@@ -12,6 +12,7 @@ import bokeh.models
 from bokeh.palettes import Category10, Turbo256
 from bokeh.models import BoxAnnotation
 from common_plot import apply_export_prefix_to_pane, TitledPlotPane
+import common_plot
 
 OK = "OK:"; WARN = "Warning:"
 def ok(m:str)->str: return f"{OK} {m}"
@@ -267,18 +268,19 @@ class AlignmentController:
         self.anchor_sources.clear()
         for i, s in enumerate(self._samples):
             df = self.input_by_sample[s]
-            y = df["intensity"].to_numpy()
-            if ash: y = np.arcsinh(y)
-            y = y - i * off
+            t_s, y_s = common_plot._extract_t_y(df)
+            if ash: y_s = np.arcsinh(y_s)
+            y_base = y_s.copy()
+            y = y_s - i * off
             color = self._colors[i % len(self._colors)]
 
             p.line(t, y, color=color, line_width=2, alpha=0.9, legend_label=str(s)[:12])
 
-            src = bokeh.models.ColumnDataSource(data=dict(x=t, y=y, sample=[s]*len(t)))
+            src = bokeh.models.ColumnDataSource(data=dict(x=t, y=y, sample=[s]*len(t), sample_idx=[i]*len(t), y_base=y_base))
             p.scatter(x="x", y="y", source=src, size=4, alpha=0.001, line_alpha=0.001, fill_color=color, line_color=color)
             self.scatter_sources[s] = src
 
-            a_src = bokeh.models.ColumnDataSource(data=dict(x=[], y=[]))
+            a_src = bokeh.models.ColumnDataSource(data=dict(x=[], y=[], sample_idx=[], y_base=[]))
             p.scatter(x="x", y="y", source=a_src, size=8, color="red")
             self.anchor_sources[s] = a_src
 
@@ -340,7 +342,7 @@ class AlignmentController:
         ash = self.asinh_toggle.value
         for i,s in enumerate(self._samples):
             df = self.input_by_sample[s]
-            y = df["intensity"].to_numpy()
+            t_s, y = common_plot._extract_t_y(df)
             if ash: y = np.arcsinh(y)
             y = y - i * off
             m = (t >= xmin) & (t <= xmax)
@@ -357,7 +359,7 @@ class AlignmentController:
         i = self._samples.index(sample)
         off = self.offset_slider.value
         ash = self.asinh_toggle.value
-        y = df["intensity"].to_numpy()
+        t_s, y = common_plot._extract_t_y(df)
         if ash: y = np.arcsinh(y)
         y = y - i * off
         m = (t >= xmin) & (t <= xmax)
@@ -372,24 +374,35 @@ class AlignmentController:
         off = self.offset_slider.value
         ash = self.asinh_toggle.value
         for i, s in enumerate(self._samples):
+            if s not in self._anchors_per_sample:
+                continue
             # Recalculate Y based on current viz params
             xs = [a[0] for a in self._anchors_per_sample[s]]
             ys = []
+            y_base_list = []
             df = self.input_by_sample[s]
-            t_arr = df["time"].to_numpy()
-            y_arr = df["intensity"].to_numpy()
+            t_arr, y_arr = common_plot._extract_t_y(df)
             if ash: y_arr = np.arcsinh(y_arr)
-            y_arr = y_arr - i * off
+            y_base_arr = y_arr.copy()
+            y_disp_arr = y_arr - i * off
 
             for tx in xs:
                 if np.isnan(tx):
                     ys.append(np.nan)
+                    y_base_list.append(np.nan)
                 else:
                     # find closest index
                     idx = np.abs(t_arr - tx).argmin()
-                    ys.append(y_arr[idx])
+                    ys.append(float(y_disp_arr[idx]))
+                    y_base_list.append(float(y_base_arr[idx]))
 
-            self.anchor_sources[s].data = dict(x=xs, y=ys)
+            if s in self.anchor_sources:
+                self.anchor_sources[s].data = dict(
+                    x=xs,
+                    y=ys,
+                    sample_idx=[i] * len(xs),
+                    y_base=y_base_list
+                )
 
     def _all_current_valid(self) -> bool:
         k = self._anchor_idx
