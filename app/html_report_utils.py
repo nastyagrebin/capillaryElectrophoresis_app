@@ -715,14 +715,18 @@ class HTMLReportController:
                 "id": "raw_electropherograms",
                 "category": "Raw Data & QC",
                 "default_title": "Raw Electropherograms Preview",
-                "getter": lambda: self._get_plot_raw(),
+                "getter": lambda offset=None: self._get_plot_raw(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("state"), "offset_slider", None), "value", 0.0),
                 "default_selected": True
             },
             {
                 "id": "control_electropherograms",
                 "category": "Raw Data & QC",
                 "default_title": "Control Electropherograms Preview",
-                "getter": lambda: self._get_plot_controls(),
+                "getter": lambda offset=None: self._get_plot_controls(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("state"), "control_offset_slider", None), "value", 0.0),
                 "default_selected": True
             },
             {
@@ -737,28 +741,45 @@ class HTMLReportController:
                 "id": "preproc_despike",
                 "category": "Preprocessing",
                 "default_title": "Despiked Traces",
-                "getter": lambda: self._get_plot_despike(),
+                "getter": lambda offset=None: self._get_plot_despike(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("despike"), "preproc_offset", None), "value", 0.0),
                 "default_selected": False
             },
             {
                 "id": "preproc_smooth",
                 "category": "Preprocessing",
                 "default_title": "Smoothed Traces",
-                "getter": lambda: self._get_plot_smooth(),
+                "getter": lambda offset=None: self._get_plot_smooth(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("smooth"), "preproc_offset", None), "value", 0.0),
                 "default_selected": False
             },
             {
                 "id": "preproc_baseline",
                 "category": "Preprocessing",
-                "default_title": "Baseline Subtracted Traces",
-                "getter": lambda: self._get_plot_baseline(),
+                "default_title": "Baseline-Subtracted Traces",
+                "getter": lambda offset=None: self._get_plot_baseline(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("baseline"), "preproc_offset", None), "value", 0.0),
                 "default_selected": False
+            },
+            {
+                "id": "preproc_norm_integration",
+                "category": "Preprocessing",
+                "default_title": "Peak Detection & Integration Preview",
+                "getter": lambda offset=None: self._get_plot_norm_integration(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("norm"), "preproc_offset", None), "value", 0.0),
+                "default_selected": True
             },
             {
                 "id": "preproc_norm",
                 "category": "Preprocessing",
                 "default_title": "Normalized Electropherograms",
-                "getter": lambda: self._get_plot_norm(),
+                "getter": lambda offset=None: self._get_plot_norm(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("norm"), "post_offset", None), "value", 0.0),
                 "default_selected": True
             },
             # Alignment
@@ -766,14 +787,18 @@ class HTMLReportController:
                 "id": "align_anchors",
                 "category": "Alignment",
                 "default_title": "Anchor Selection Curves",
-                "getter": lambda: self._get_plot_align_anchors(),
-                "default_selected": True
+                "getter": lambda offset=None: self._get_plot_align_anchors(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("alignment"), "offset_slider", None), "value", 0.0),
+                "default_selected": False
             },
             {
                 "id": "align_aligned",
                 "category": "Alignment",
                 "default_title": "Aligned Chromatograms",
-                "getter": lambda: self._get_plot_align_aligned(),
+                "getter": lambda offset=None: self._get_plot_align_aligned(offset=offset),
+                "has_offset": True,
+                "get_offset": lambda: getattr(getattr(self.controllers.get("alignment"), "aligned_offset_slider", None), "value", 0.0),
                 "default_selected": True
             },
             # NMF Decomposition (Basis Regression Matrix moved here as requested)
@@ -896,10 +921,23 @@ class HTMLReportController:
         ]
 
     # ---------------- Plot Getters from Controllers ----------------
-    def _get_plot_raw(self):
+    def _get_plot_raw(self, offset=None):
         state = self.controllers.get("state")
         if not state:
             return None
+        if offset is not None and getattr(state, "converted_by_sample", None):
+            samples = state.converted_by_sample
+            if getattr(state, "sort_by_order_btn", None) and getattr(state.sort_by_order_btn, "value", False) and state.metadata_df is not None and 'Order of Run' in state.metadata_df.columns:
+                try:
+                    order_map = state.metadata_df.set_index('Original Name')['Order of Run'].dropna().to_dict()
+                    sorted_keys = sorted(samples.keys(), key=lambda k: order_map.get(k, 999999))
+                    samples = {k: samples[k] for k in sorted_keys}
+                except Exception:
+                    pass
+            min_pref = getattr(getattr(state, "prefer_minutes", None), "value", True)
+            ash = getattr(getattr(state, "asinh_toggle", None), "value", True)
+            return common_plot.plot_multi(samples, "Chromatograph(s) preview", offset=offset, asinh=ash, minutes=min_pref)
+
         fig = getattr(state, "last_fig", None)
         if fig is None:
             fig = getattr(state, "last_plot", None)
@@ -907,10 +945,23 @@ class HTMLReportController:
             fig = extract_bokeh_figure(getattr(state, "plot_pane", None))
         return fig
 
-    def _get_plot_controls(self):
+    def _get_plot_controls(self, offset=None):
         state = self.controllers.get("state")
         if not state:
             return None
+        if offset is not None and getattr(state, "control_converted_by_sample", None):
+            samples = state.control_converted_by_sample
+            if getattr(state, "control_sort_by_order_btn", None) and getattr(state.control_sort_by_order_btn, "value", False) and state.control_metadata_df is not None and 'Order of Run' in state.control_metadata_df.columns:
+                try:
+                    order_map = state.control_metadata_df.set_index('Original Name')['Order of Run'].dropna().to_dict()
+                    sorted_keys = sorted(samples.keys(), key=lambda k: order_map.get(k, 999999))
+                    samples = {k: samples[k] for k in sorted_keys}
+                except Exception:
+                    pass
+            min_pref = getattr(getattr(state, "control_prefer_minutes", None), "value", True)
+            ash = getattr(getattr(state, "control_asinh_toggle", None), "value", True)
+            return common_plot.plot_multi(samples, "Control Chromatograph(s) preview", offset=offset, asinh=ash, minutes=min_pref)
+
         fig = getattr(state, "control_last_fig", None)
         if fig is None:
             fig = extract_bokeh_figure(getattr(state, "control_plot_pane", None))
@@ -1029,29 +1080,103 @@ class HTMLReportController:
 
         return f"<div class='snr-report-block'>{regions_html}{excluded_html}{table_html}</div>"
 
-    def _get_plot_despike(self):
+    def _get_plot_despike(self, offset=None):
         ctrl = self.controllers.get("despike")
-        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        out = getattr(ctrl, "output_by_sample", None)
+        ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
+        off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
+        if offset is not None and out:
+            return common_plot.plot_multi(out, "After: despiked", offset=off, asinh=ash)
 
-    def _get_plot_smooth(self):
+        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if fig is None and out:
+            return common_plot.plot_multi(out, "After: despiked", offset=off, asinh=ash)
+        return fig
+
+    def _get_plot_smooth(self, offset=None):
         ctrl = self.controllers.get("smooth")
-        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        out = getattr(ctrl, "output_by_sample", None) or getattr(ctrl, "smoothed_by_sample", None)
+        ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
+        off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
+        if offset is not None and out:
+            return common_plot.plot_multi(out, "After smoothing", offset=off, asinh=ash)
 
-    def _get_plot_baseline(self):
+        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if fig is None and out:
+            return common_plot.plot_multi(out, "After smoothing", offset=off, asinh=ash)
+        return fig
+
+    def _get_plot_baseline(self, offset=None):
         ctrl = self.controllers.get("baseline")
-        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        out = getattr(ctrl, "output_by_sample", None)
+        ash = getattr(getattr(ctrl, "asinh_toggle", None), "value", True)
+        off = offset if offset is not None else getattr(getattr(ctrl, "preproc_offset", None), "value", 0.0)
+        if offset is not None and out:
+            return common_plot.plot_multi(out, "After: baseline-subtracted", offset=off, asinh=ash)
 
-    def _get_plot_norm(self):
+        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if fig is None and out:
+            return common_plot.plot_multi(out, "After: baseline-subtracted", offset=off, asinh=ash)
+        return fig
+
+    def _get_plot_norm_integration(self, offset=None):
         ctrl = self.controllers.get("norm")
-        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        if offset is not None and getattr(ctrl, "current_by_sample", None):
+            try:
+                ctrl.preproc_offset.value = offset
+                ctrl._render_before_fig()
+            except Exception:
+                pass
+        fig = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
+        if fig is None and getattr(ctrl, "current_by_sample", None):
+            try:
+                ctrl._render_before_fig()
+                fig = extract_bokeh_figure(getattr(ctrl, "before_pane", None))
+            except Exception:
+                pass
+        return fig
 
-    def _get_plot_align_anchors(self):
-        ctrl = self.controllers.get("alignment")
-        return extract_bokeh_figure(getattr(ctrl, "anchor_plot_pane", None)) if ctrl else None
+    def _get_plot_norm(self, offset=None):
+        ctrl = self.controllers.get("norm")
+        if not ctrl:
+            return None
+        norm_s = getattr(ctrl, "normalized_by_sample", None)
+        ash = getattr(getattr(ctrl, "post_asinh", None), "value", True)
+        off = offset if offset is not None else getattr(getattr(ctrl, "post_offset", None), "value", 0.0)
+        if offset is not None and norm_s:
+            return common_plot.plot_multi(norm_s, title="Normalized Electropherograms", xlab="time", ylab="intensity (normalized)", offset=off, asinh=ash, line_width=2)
 
-    def _get_plot_align_aligned(self):
+        fig = extract_bokeh_figure(getattr(ctrl, "after_pane", None))
+        if fig is None and norm_s:
+            return common_plot.plot_multi(norm_s, title="Normalized Electropherograms", xlab="time", ylab="intensity (normalized)", offset=off, asinh=ash, line_width=2)
+        return fig
+
+    def _get_plot_align_anchors(self, offset=None):
         ctrl = self.controllers.get("alignment")
-        return extract_bokeh_figure(getattr(ctrl, "aligned_plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        fig = extract_bokeh_figure(getattr(ctrl, "selection_pane", getattr(ctrl, "anchor_plot_pane", None)))
+        return fig
+
+    def _get_plot_align_aligned(self, offset=None):
+        ctrl = self.controllers.get("alignment")
+        if not ctrl:
+            return None
+        al_s = getattr(ctrl, "aligned_by_sample", None)
+        if offset is not None and al_s:
+            ash = getattr(getattr(ctrl, "aligned_asinh_toggle", None), "value", True)
+            return common_plot.plot_multi(al_s, title="Aligned Chromatograms", xlab="pseudotime", ylab="intensity (asinh)" if ash else "intensity (raw)", offset=offset, asinh=ash, line_width=2)
+
+        fig = extract_bokeh_figure(getattr(ctrl, "aligned_pane", getattr(ctrl, "aligned_plot_pane", None)))
+        return fig
 
     def _get_plot_nmf_recon(self):
         ctrl = self.controllers.get("nmf")
@@ -1110,7 +1235,12 @@ class HTMLReportController:
 
     def _get_plot_diversity(self):
         ctrl = self.controllers.get("diversity")
-        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None)) if ctrl else None
+        if not ctrl:
+            return None
+        figs = find_all_bokeh_figures(getattr(ctrl, "plots_column", None))
+        if figs:
+            return figs[0]
+        return extract_bokeh_figure(getattr(ctrl, "plot_pane", None))
 
     def _get_plot_viz_scree(self):
         ctrl = self.controllers.get("viz")
@@ -1275,7 +1405,7 @@ class HTMLReportController:
                     name=it["default_title"],
                     value=ready and it.get("default_selected", False),
                     disabled=not ready,
-                    width=320
+                    width=300
                 )
                 title_inp = pn.widgets.TextInput(
                     value=it["default_title"],
@@ -1283,14 +1413,41 @@ class HTMLReportController:
                     disabled=not ready
                 )
 
+                offset_slider = None
+                if it.get("has_offset"):
+                    cur_off = 0.0
+                    if "get_offset" in it:
+                        try:
+                            v = it["get_offset"]()
+                            if v is not None and isinstance(v, (int, float)):
+                                cur_off = float(v)
+                        except Exception:
+                            cur_off = 0.0
+                    max_off = 1.0 if it["id"] == "preproc_norm" else 10.0
+                    step_off = 0.05 if it["id"] == "preproc_norm" else 0.5
+                    offset_slider = pn.widgets.FloatSlider(
+                        name="Vertical offset",
+                        start=0.0,
+                        end=max_off,
+                        step=step_off,
+                        value=cur_off,
+                        width=180,
+                        disabled=not (ready and it.get("default_selected", False))
+                    )
+                    chk.param.watch(lambda e, sl=offset_slider: setattr(sl, "disabled", not e.new), "value")
+
                 self._standard_plot_widgets[it["id"]] = {
                     "checkbox": chk,
                     "title_input": title_inp,
+                    "offset_slider": offset_slider,
                     "getter": it["getter"],
                     "category": cat_name,
                     "is_ready": ready
                 }
-                rows.append(pn.Row(chk, badge, title_inp, sizing_mode="stretch_width", margin=(2, 0, 2, 0)))
+                row_items = [chk, badge, title_inp]
+                if offset_slider is not None:
+                    row_items.append(offset_slider)
+                rows.append(pn.Row(*row_items, sizing_mode="stretch_width", margin=(2, 0, 2, 0)))
 
             card = pn.Column(header, *rows, margin=(0, 0, 10, 0))
             card_objects.append(card)
@@ -1647,6 +1804,53 @@ class HTMLReportController:
             self._current_html_str = html_content
         return io.BytesIO(self._current_html_str.encode("utf-8"))
 
+def attach_interactive_offset_slider(fig: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
+    """Attach a client-side Bokeh Slider to a multi-trace plot with CustomJS to interactively adjust vertical offset."""
+    if not hasattr(fig, "renderers"):
+        return fig
+
+    sources = []
+    idx = 0
+    for r in fig.renderers:
+        if hasattr(r, "data_source") and "y" in r.data_source.data and "x" in r.data_source.data:
+            if hasattr(r, "glyph") and isinstance(r.glyph, bokeh.models.Line):
+                src = r.data_source
+                y_curr = np.array(src.data["y"], dtype=float)
+                y_base = y_curr + idx * initial_offset
+                src.data["y_base"] = y_base
+                src.data["sample_idx"] = [idx] * len(y_base)
+                sources.append(src)
+                idx += 1
+
+    if not sources:
+        return fig
+
+    slider = bokeh.models.Slider(
+        title="Interactive Vertical Offset",
+        start=0.0,
+        end=max_offset,
+        step=step,
+        value=initial_offset,
+        sizing_mode="stretch_width"
+    )
+    cb = bokeh.models.CustomJS(args=dict(sources=sources), code="""
+        const val = cb_obj.value;
+        for (let i = 0; i < sources.length; i++) {
+            const src = sources[i];
+            const idx = src.data['sample_idx'][0];
+            const y_base = src.data['y_base'];
+            const new_y = [];
+            for (let j = 0; j < y_base.length; j++) {
+                new_y.push(y_base[j] - idx * val);
+            }
+            src.data['y'] = new_y;
+            src.change.emit();
+        }
+    """)
+    slider.js_on_change("value", cb)
+    return bokeh.layouts.column(slider, fig, sizing_mode="stretch_width")
+
+
     def _compile_html_document(self) -> Tuple[str, int]:
         """Compile selected standard plots, nested NMF group sections, subplots, custom images, and parameters into HTML."""
         # 1. Collect standard plots
@@ -1657,7 +1861,12 @@ class HTMLReportController:
                 w = self._standard_plot_widgets[pid]
                 if w["checkbox"].value and w["is_ready"]:
                     user_title = w["title_input"].value or item["default_title"]
-                    res = w["getter"]()
+                    offset_val = w["offset_slider"].value if "offset_slider" in w and w["offset_slider"] is not None else None
+                    if offset_val is not None:
+                        res = w["getter"](offset=offset_val)
+                    else:
+                        res = w["getter"]()
+
                     if res is not None:
                         if isinstance(res, dict) and res.get("type") == "snr_table":
                             selected_standard_plots.append({
@@ -1669,11 +1878,18 @@ class HTMLReportController:
                                 "caption": ""
                             })
                         else:
+                            fig_to_use = res
+                            if item.get("has_offset") and hasattr(res, "renderers"):
+                                max_off = 1.0 if pid == "preproc_norm" else 10.0
+                                step_off = 0.05 if pid == "preproc_norm" else 0.5
+                                off_val = offset_val if offset_val is not None else 0.0
+                                fig_to_use = attach_interactive_offset_slider(res, initial_offset=off_val, max_offset=max_off, step=step_off)
+
                             selected_standard_plots.append({
                                 "id": pid,
                                 "category": item["category"],
                                 "title": user_title,
-                                "figure": res,
+                                "figure": fig_to_use,
                                 "caption": ""
                             })
 

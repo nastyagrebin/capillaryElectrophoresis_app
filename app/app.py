@@ -200,6 +200,10 @@ state.plot_pane = plot_pane
 offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
 upload_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
 sort_by_order_btn = pn.widgets.Checkbox(name="Sort by Order of Run", value=False)
+state.offset_slider = offset_slider
+state.prefer_minutes = prefer_minutes
+state.asinh_toggle = asinh_toggle
+state.sort_by_order_btn = sort_by_order_btn
 
 downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(zip_name, zip_download), pn.Row(merge_name, merge_download), merge_status, visible=False, sizing_mode="stretch_width")
 preview_group = pn.Column(pn.pane.Markdown("### Chromatograph(s) preview"), pn.Row(offset_slider, asinh_toggle, upload_svg_export, sort_by_order_btn), plot_pane, visible=False, sizing_mode="stretch_width")
@@ -596,6 +600,10 @@ state.control_plot_pane = control_plot_pane
 control_offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
 control_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
 control_sort_by_order_btn = pn.widgets.Checkbox(name="Sort by Order of Run", value=False)
+state.control_offset_slider = control_offset_slider
+state.control_prefer_minutes = control_prefer_minutes
+state.control_asinh_toggle = control_asinh_toggle
+state.control_sort_by_order_btn = control_sort_by_order_btn
 
 control_downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(control_zip_name, control_zip_download), pn.Row(control_merge_name, control_merge_download), control_merge_status, visible=False, sizing_mode="stretch_width")
 control_preview_group = pn.Column(pn.pane.Markdown("### Control Chromatograph(s) preview"), pn.Row(control_offset_slider, control_asinh_toggle, control_svg_export, control_sort_by_order_btn), control_plot_pane, visible=False, sizing_mode="stretch_width")

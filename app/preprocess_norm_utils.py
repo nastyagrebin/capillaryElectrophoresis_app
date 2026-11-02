@@ -149,7 +149,17 @@ class NormalizationController:
         fig.ygrid.grid_line_color = None
 
         # Grey selection indicator band
-        sel_box = BoxAnnotation(left=None, right=None, fill_alpha=0.15, fill_color="gray", line_color=None, level="underlay")
+        xmin_prev = float(self._sel_state.data.get("xmin", [np.nan])[0])
+        xmax_prev = float(self._sel_state.data.get("xmax", [np.nan])[0])
+        has_sel = np.isfinite(xmin_prev) and np.isfinite(xmax_prev)
+        if has_sel and xmax_prev < xmin_prev:
+            xmin_prev, xmax_prev = xmax_prev, xmin_prev
+
+        sel_box = BoxAnnotation(
+            left=xmin_prev if has_sel else None,
+            right=xmax_prev if has_sel else None,
+            fill_alpha=0.15, fill_color="gray", line_color=None, level="underlay"
+        )
         fig.add_layout(sel_box)
         self._sel_box = sel_box
 
@@ -179,7 +189,28 @@ class NormalizationController:
                 selection_fill_alpha=0.0, selection_line_alpha=0.0,
                 hover_fill_alpha=0.0, hover_line_alpha=0.0,
             )
-            auc_src = ColumnDataSource(dict(px=[], py=[]))
+            
+            px_init, py_init = [], []
+            if has_sel:
+                points_idx = np.where((x >= xmin_prev) & (x <= xmax_prev))[0]
+                if len(points_idx) > 0:
+                    best = int(points_idx[np.argmax(y_disp[points_idx])])
+                    L, R = best, best
+                    eps = 1e-9
+                    while L > 0 and y_disp[L-1] <= y_disp[L] + eps:
+                        L -= 1
+                    while R < len(y_disp) - 1 and y_disp[R+1] <= y_disp[R] + eps:
+                        R += 1
+                    while L < best and x[L] < xmin_prev:
+                        L += 1
+                    while R > best and x[R] > xmax_prev:
+                        R -= 1
+                    if L < R:
+                        base_y = - (i * off)
+                        px_init = list(x[L:R+1]) + list(x[L:R+1][::-1])
+                        py_init = list(y_disp[L:R+1]) + [base_y] * len(x[L:R+1])
+
+            auc_src = ColumnDataSource(dict(px=px_init, py=py_init))
             fig.patch("px","py", source=auc_src, fill_color="red", fill_alpha=0.35, line_color=None)
             self._auc_patch_by_sample[name] = auc_src
 
