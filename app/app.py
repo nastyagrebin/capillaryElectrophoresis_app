@@ -68,6 +68,14 @@ class SessionState:
         self.H_df: Optional[pd.DataFrame] = None
         # Session parameters logging
         self.session_log: Dict[str, dict] = {}
+        # Control samples
+        self.control_uploads: List[Tuple[str, bytes]] = []
+        self.control_sample_names: Dict[str, str] = {}
+        self.control_converted_by_sample: Dict[str, pd.DataFrame] = {}
+        self.control_merged_df: Optional[pd.DataFrame] = None
+        self.control_last_fig: Optional[bokeh.plotting.Figure] = None
+        self.control_metadata_df: Optional[pd.DataFrame] = None
+        self.control_plot_pane: Optional[Any] = None
 
 state = SessionState()
 
@@ -75,6 +83,7 @@ state = SessionState()
 def _snapshot_state_to_cache(key: str):
     pn.state.cache[key] = dict(
         converted_by_sample={k: v.copy() for k, v in state.converted_by_sample.items()},
+        control_converted_by_sample={k: v.copy() for k, v in state.control_converted_by_sample.items()},
         current_by_sample={k: v.copy() for k, v in state.current_by_sample.items()},
         aligned_pseudotimes_df=None if state.aligned_pseudotimes_df is None else state.aligned_pseudotimes_df.copy(),
         aligned_norm_df=None if state.aligned_norm_df is None else state.aligned_norm_df.copy(),
@@ -87,6 +96,8 @@ def _restore_state_from_cache(key: str):
     if not snap: 
         return False
     state.converted_by_sample = {k: v.copy() for k, v in snap["converted_by_sample"].items()}
+    if "control_converted_by_sample" in snap:
+        state.control_converted_by_sample = {k: v.copy() for k, v in snap["control_converted_by_sample"].items()}
     state.current_by_sample   = {k: v.copy() for k, v in snap["current_by_sample"].items()}
     state.aligned_pseudotimes_df = None if snap["aligned_pseudotimes_df"] is None else snap["aligned_pseudotimes_df"].copy()
     state.aligned_norm_df        = None if snap["aligned_norm_df"] is None else snap["aligned_norm_df"].copy()
@@ -185,6 +196,7 @@ merge_download._manually_prefixed = True
 merge_name.param.watch(lambda e: setattr(merge_download, "filename", e.new or "merged.csv"), "value")
 
 plot_pane = TitledPlotPane(sizing_mode="stretch_width")
+state.plot_pane = plot_pane
 offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
 upload_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
 sort_by_order_btn = pn.widgets.Checkbox(name="Sort by Order of Run", value=False)
@@ -524,9 +536,353 @@ right_col = pn.Column(
     sizing_mode="stretch_both",
     width=420,
 )
+# ===================== Control Samples =====================
+control_upload = pn.widgets.FileInput(accept=".cdf,.CDF,.csv,.CSV", multiple=True)
+control_prefer_minutes = pn.widgets.Checkbox(name="Convert time to minutes (from seconds)", value=True)
+control_asinh_toggle = pn.widgets.Checkbox(name="Use asinh transform", value=True)
+control_upload_status = pn.pane.Markdown("Upload one or more control `.cdf` or `.csv` files.", sizing_mode="stretch_width")
+control_convert_btn = pn.widgets.Button(name="Process Control Files", button_type="primary", disabled=True)
+
+control_rename_status = pn.pane.Markdown("", sizing_mode="stretch_width")
+control_rename_box = pn.Column(sizing_mode="stretch_width")
+
+def _unique_control_names(names: List[str]) -> Tuple[bool, str]:
+    lower = [n.lower() for n in names]
+    return (True, "OK") if len(set(lower)) == len(lower) else (False, "Duplicate names detected.")
+
+def _build_control_rename_panel():
+    if not state.control_uploads:
+        control_rename_status.object = ""
+        control_rename_box.clear()
+        return
+    if not state.control_sample_names:
+        state.control_sample_names = {orig: sanitize_name(orig) for orig, _ in state.control_uploads}
+        
+    rows = []
+    for orig, _ in state.control_uploads:
+        left = pn.pane.Markdown(f"**Original**: `{Path(orig).name}`", width=380)
+        edit = pn.widgets.TextInput(name="", value=state.control_sample_names[orig], width=260)
+        def _on_control_change(event, orig=orig, edit=edit):
+            val = sanitize_name(event.new)
+            edit.value = val
+            state.control_sample_names[orig] = val
+            names = [state.control_sample_names[o] for o, _ in state.control_uploads]
+            ok_flag, msg = _unique_control_names(names)
+            control_rename_status.object = ok("Names are valid.") if ok_flag else warn(msg)
+            control_convert_btn.disabled = not ok_flag
+        edit.param.watch(_on_control_change, "value")
+        rows.append(pn.Row(left, edit))
+        
+    control_rename_box.objects = rows
+    
+    names = [state.control_sample_names[o] for o, _ in state.control_uploads]
+    ok_flag, msg = _unique_control_names(names)
+    control_rename_status.object = ok("Names are valid.") if ok_flag else warn(msg)
+    control_convert_btn.disabled = not ok_flag
+
+control_zip_name = pn.widgets.TextInput(name="ZIP filename (per-sample CSVs)", value="CE_analysis_control_converted_csvs.zip")
+control_zip_download = pn.widgets.FileDownload(label="Download ZIP", filename=control_zip_name.value, button_type="primary", embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True)
+control_zip_download._manually_prefixed = True
+control_zip_name.param.watch(lambda e: setattr(control_zip_download, "filename", e.new or "control_converted_csvs.zip"), "value")
+
+control_merge_status = pn.pane.Markdown("", sizing_mode="stretch_width")
+control_merge_name = pn.widgets.TextInput(name="Merged CSV filename", value="CE_analysis_control_merged.csv")
+control_merge_download = pn.widgets.FileDownload(label="Download Merged CSV", filename=control_merge_name.value, button_type="primary", embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True)
+control_merge_download._manually_prefixed = True
+control_merge_name.param.watch(lambda e: setattr(control_merge_download, "filename", e.new or "control_merged.csv"), "value")
+
+control_plot_pane = TitledPlotPane(sizing_mode="stretch_width")
+state.control_plot_pane = control_plot_pane
+control_offset_slider = pn.widgets.FloatSlider(name="Vertical offset", start=0.0, end=10.0, step=0.5, value=0.0, sizing_mode="stretch_width")
+control_svg_export = pn.widgets.Checkbox(name="Enable SVG Export Mode", value=False)
+control_sort_by_order_btn = pn.widgets.Checkbox(name="Sort by Order of Run", value=False)
+
+control_downloads_group = pn.Column(pn.pane.Markdown("### Downloads"), pn.Row(control_zip_name, control_zip_download), pn.Row(control_merge_name, control_merge_download), control_merge_status, visible=False, sizing_mode="stretch_width")
+control_preview_group = pn.Column(pn.pane.Markdown("### Control Chromatograph(s) preview"), pn.Row(control_offset_slider, control_asinh_toggle, control_svg_export, control_sort_by_order_btn), control_plot_pane, visible=False, sizing_mode="stretch_width")
+
+def _on_control_upload_change(event):
+    files = []
+    if isinstance(control_upload.value, (bytes, bytearray)):
+        if control_upload.value:
+            files = [(control_upload.filename or "uploaded.cdf", bytes(control_upload.value))]
+    elif isinstance(control_upload.value, list):
+        names = control_upload.filename if isinstance(control_upload.filename, list) else [control_upload.filename] * len(control_upload.value)
+        for nm, by in zip(names, control_upload.value):
+            if by:
+                files.append((nm or "uploaded.cdf", bytes(by)))
+    else:
+        val = getattr(control_upload, "value", None)
+        if isinstance(val, dict):
+            files = list(val.items())
+
+    state.control_uploads = files
+    state.control_converted_by_sample.clear()
+    state.control_merged_df = None
+    state.control_last_fig = None
+
+    control_zip_download.disabled = True
+    control_merge_download.disabled = True
+    control_merge_status.object = ""
+    control_plot_pane.object = None
+    control_downloads_group.visible = False
+    control_preview_group.visible = False
+
+    if not files:
+        control_upload_status.object = warn("No files selected.")
+        state.control_sample_names.clear()
+        control_rename_box.objects = []
+        control_rename_status.object = ""
+        control_convert_btn.disabled = True
+        return
+
+    state.control_sample_names = {orig: sanitize_name(orig) for orig, _ in state.control_uploads}
+    _build_control_rename_panel()
+    control_upload_status.object = ok(f"Queued {len(files)} control file(s). Edit names on the right, then click 'Process Control Files'.")
+
+control_upload.param.watch(_on_control_upload_change, "value")
+
+def _render_control_plot(*_):
+    if not state.control_converted_by_sample:
+        control_plot_pane.object = None
+        state.control_last_fig = None
+        return
+        
+    samples = state.control_converted_by_sample
+    if control_sort_by_order_btn.value and state.control_metadata_df is not None and 'Order of Run' in state.control_metadata_df.columns:
+        try:
+            order_map = state.control_metadata_df.set_index('Original Name')['Order of Run'].dropna().to_dict()
+            sorted_keys = sorted(samples.keys(), key=lambda k: order_map.get(k, 999999))
+            samples = {k: samples[k] for k in sorted_keys}
+        except Exception:
+            pass
+            
+    fig = make_preview_plot(samples, minutes=control_prefer_minutes.value, offset=control_offset_slider.value, asinh=control_asinh_toggle.value, title="Control Chromatograph(s) preview")
+    fig.output_backend = "svg" if control_svg_export.value else "canvas"
+    control_plot_pane.object = fig
+    apply_export_prefix_to_pane(control_plot_pane, global_export_prefix.value, "")
+    state.control_last_fig = fig
+
+control_offset_slider.param.watch(_render_control_plot, "value")
+control_prefer_minutes.param.watch(_render_control_plot, "value")
+control_asinh_toggle.param.watch(_render_control_plot, "value")
+control_svg_export.param.watch(_render_control_plot, "value")
+control_sort_by_order_btn.param.watch(_render_control_plot, "value")
+
+def _on_control_convert_click(event):
+    if not state.control_uploads:
+        control_upload_status.object = warn("Upload control files first.")
+        return
+    names = [state.control_sample_names.get(orig, sanitize_name(orig)) for orig, _ in state.control_uploads]
+    ok_flag, msg = _unique_control_names(names)
+    if not ok_flag:
+        control_upload_status.object = warn(msg); control_convert_btn.disabled = True; return
+
+    errors = []
+    state.control_converted_by_sample.clear()
+    state.control_merged_df = None
+    state.control_last_fig = None
+    control_merge_download.disabled = True; control_merge_status.object = ""
+    control_plot_pane.object = None; control_downloads_group.visible = False; control_preview_group.visible = False
+
+    for orig, by in state.control_uploads:
+        try:
+            if orig.lower().endswith(".cdf"):
+                df = convert_cdf_bytes_to_df(orig, by, prefer_minutes=control_prefer_minutes.value)
+                sample = state.control_sample_names.get(orig, sanitize_name(orig))
+                state.control_converted_by_sample[sample] = df
+            else:
+                dfs = load_csv_bytes_to_dfs(orig, by)
+                for s_name, s_df in dfs.items():
+                    final_name = state.control_sample_names.get(orig, s_name) if len(dfs) == 1 else s_name
+                    state.control_converted_by_sample[final_name] = s_df
+        except Exception as e:
+            errors.append(f"{Path(orig).name}: {e}")
+
+    if not state.control_converted_by_sample:
+        control_upload_status.object = warn("Conversion failed."); return
+
+    _render_control_plot()
+    control_downloads_group.visible = True; control_preview_group.visible = True
+
+    def _control_zip_bytes():
+        bio = io.BytesIO()
+        with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for sample, df in state.control_converted_by_sample.items():
+                zf.writestr(f"{sample}.csv", df.to_csv(index=False))
+        bio.seek(0); return bio
+    control_zip_download.callback = _control_zip_bytes; control_zip_download.disabled = False
+
+    merged, reason = try_merge_same_time(state.control_converted_by_sample)
+    if merged is not None:
+        state.control_merged_df = merged
+        def _control_merged_bytes():
+            bio = io.BytesIO(); state.control_merged_df.to_csv(bio, index=False); bio.seek(0); return bio
+        control_merge_download.callback = _control_merged_bytes; control_merge_download.disabled = False
+        control_merge_status.object = ok("Time stamps match across all control files. You can download the merged CSV.")
+    else:
+        control_merge_download.disabled = True
+        control_merge_status.object = warn(f"Cannot merge into one CSV: {reason}")
+
+    msg = ok(f"Processed {len(state.control_converted_by_sample)} control sample(s).")
+    if errors:
+        msg += f" {WARN} {len(errors)} failed: " + "; ".join(errors[:3]) + (" ..." if len(errors) > 3 else "")
+    control_upload_status.object = msg
+
+control_convert_btn.on_click(_on_control_convert_click)
+
+# ===================== Control Metadata Extractor =====================
+control_meta_pattern_input = pn.widgets.TextInput(name="Extraction Pattern", value="[*]-[M]-[DD]-[YYYY]_[HR]-[MIN]-[SEC]_[AM]dat-LIF_[*].cdf", sizing_mode="stretch_width")
+control_meta_extract_btn = pn.widgets.Button(name="Extract Metadata", button_type="primary", width=150)
+control_meta_status = pn.pane.Markdown("", sizing_mode="stretch_width")
+control_meta_table = pn.widgets.Tabulator(pd.DataFrame(), height=200, show_index=False, sizing_mode="stretch_width")
+control_meta_csv_name = pn.widgets.TextInput(name="Metadata CSV", value="control_metadata.csv", width=200)
+control_meta_csv_btn = pn.widgets.FileDownload(
+    label="Download Metadata", filename=control_meta_csv_name.value, button_type="success",
+    embed=False, auto=False, callback=lambda: io.BytesIO(b""), disabled=True
+)
+control_meta_csv_name.param.watch(lambda e: setattr(control_meta_csv_btn, "filename", e.new or "control_metadata.csv"), "value")
+
+def _on_control_meta_extract_click(event):
+    if not state.control_sample_names:
+        control_meta_status.object = warn("No control samples uploaded.")
+        return
+        
+    pattern = control_meta_pattern_input.value
+    if not pattern:
+        control_meta_status.object = warn("Please enter a pattern.")
+        return
+        
+    pattern = re.sub(r'(?i)\.cdf$', '', pattern)
+    pattern = re.sub(r'(?i)\.csv$', '', pattern)
+        
+    regex_parts = []
+    variables = []
+    
+    parts = re.split(r'(\[[^\]]+\])', pattern)
+    for p in parts:
+        if p.startswith('[') and p.endswith(']'):
+            var_name = p[1:-1]
+            if var_name == '*':
+                regex_parts.append('.*?')
+            else:
+                regex_parts.append(f"(?P<{var_name}>.*?)")
+                variables.append(var_name)
+        else:
+            regex_parts.append(re.escape(p))
+            
+    regex_str = "".join(regex_parts)
+    
+    try:
+        compiled_re = re.compile(regex_str, re.IGNORECASE)
+    except Exception as e:
+        control_meta_status.object = warn(f"Invalid pattern regex: {str(e)}")
+        return
+        
+    extracted = []
+    for s_id, s_name in state.control_sample_names.items():
+        match = compiled_re.search(s_name)
+        if match:
+            d = match.groupdict()
+            d['_sample_id'] = s_id
+            d['Original Name'] = s_name
+            extracted.append(d)
+        else:
+            extracted.append({'_sample_id': s_id, 'Original Name': s_name})
+            
+    df = pd.DataFrame(extracted)
+    
+    has_year = 'YYYY' in df.columns or 'YY' in df.columns
+    has_month = 'MM' in df.columns or 'M' in df.columns
+    has_day = 'DD' in df.columns or 'D' in df.columns
+    
+    if len(df) > 0 and has_year and has_month and has_day:
+        parsed_dates = []
+        for i, row in df.iterrows():
+            try:
+                y = row.get('YYYY') or row.get('YY') or '2000'
+                m = row.get('M') or row.get('MM') or '1'
+                d = row.get('DD') or row.get('D') or '1'
+                date_str = f"{y}-{m}-{d}"
+                
+                time_str = "00:00:00"
+                h = row.get('HR') or row.get('HH') or row.get('HH24')
+                min_val = row.get('MIN') or row.get('MM_min')
+                if not min_val and 'M' in df.columns and 'MM' in df.columns:
+                    min_val = row.get('MM')
+                min_val = min_val or '00'
+                s = row.get('SEC') or row.get('SS') or '00'
+                
+                if h is not None:
+                    time_str = f"{h}:{min_val}:{s}"
+                    pm = row.get('AM') or row.get('PM')
+                    if pm:
+                        dt = datetime.strptime(f"{date_str} {time_str} {pm}", "%Y-%m-%d %I:%M:%S %p")
+                    else:
+                        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
+                else:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                parsed_dates.append(dt)
+            except Exception:
+                parsed_dates.append(None)
+        
+        df['Parsed Datetime'] = parsed_dates
+        df['Order of Run'] = df['Parsed Datetime'].rank(method='min').astype('Int64')
+        
+    state.control_metadata_df = df
+    control_meta_table.value = df.drop(columns=['_sample_id']) if '_sample_id' in df.columns else df
+    
+    def _control_csv_bytes():
+        bio = io.BytesIO()
+        df.to_csv(bio, index=False)
+        bio.seek(0)
+        return bio
+        
+    control_meta_csv_btn.callback = _control_csv_bytes
+    control_meta_csv_btn.disabled = False
+    control_meta_status.object = ok(f"Extracted metadata for {len(df)} control samples.")
+    
+    _render_control_plot()
+
+control_meta_extract_btn.on_click(_on_control_meta_extract_click)
+
+control_left_col = pn.Column(
+    pn.pane.Markdown("### 1) Upload & Process Controls (.cdf or .csv)"),
+    pn.Row(control_upload, pn.Spacer(width=12), control_prefer_minutes),
+    pn.Row(control_convert_btn),
+    pn.Spacer(height=8),
+    control_upload_status,
+    pn.layout.Divider(),
+    control_downloads_group,
+)
+control_mid_col = pn.Column(
+    pn.pane.Markdown("### Control Sample Renamer"),
+    pn.pane.Markdown("Edit each control sample name (must be unique)."),
+    control_rename_status,
+    pn.layout.Divider(),
+    control_rename_box,
+    sizing_mode="stretch_both",
+    width=380,
+)
+control_right_col = pn.Column(
+    pn.pane.Markdown("### Control Metadata Extractor"),
+    pn.pane.Markdown("Extract variables from control filenames using brackets. E.g. `[sample]_[*]-[YYYY]-[MM]-[DD].cdf`"),
+    control_meta_pattern_input,
+    control_meta_extract_btn,
+    control_meta_status,
+    control_meta_table,
+    pn.Row(control_meta_csv_name, control_meta_csv_btn),
+    sizing_mode="stretch_both",
+    width=420,
+)
+
 upload_tab = pn.Column(
+    pn.pane.Markdown("## Experimental Samples"),
     preview_group,
     pn.Row(left_col, pn.layout.HSpacer(width=16), mid_col, pn.layout.HSpacer(width=16), right_col, sizing_mode="stretch_width"),
+    pn.layout.Divider(),
+    pn.pane.Markdown("## Control Samples"),
+    control_preview_group,
+    pn.Row(control_left_col, pn.layout.HSpacer(width=16), control_mid_col, pn.layout.HSpacer(width=16), control_right_col, sizing_mode="stretch_width"),
     sizing_mode="stretch_width"
 )
 
@@ -980,7 +1336,7 @@ global_export_prefix = pn.widgets.TextInput(name="Global Export Prefix", value="
 def _update_export_prefixes(event):
     p = getattr(event, "new", event)
     old_p = getattr(event, "old", "") if hasattr(event, "old") else ""
-    for w in [zip_name, merge_name, meta_csv_name]:
+    for w in [zip_name, merge_name, meta_csv_name, control_zip_name, control_merge_name, control_meta_csv_name]:
         val = w.value
         if old_p and val.startswith(f"{old_p}_"):
             w.value = f"{p}_{val[len(old_p)+1:]}"
@@ -1006,6 +1362,8 @@ def _update_colormap(event):
     # Trigger a replot of the preview if it exists
     if len(state.current_by_sample) > 0:
         _render_plot()
+    if len(state.control_converted_by_sample) > 0:
+        _render_control_plot()
 
 global_colormap.param.watch(_update_colormap, "value")
 

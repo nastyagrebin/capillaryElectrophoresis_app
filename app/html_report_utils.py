@@ -719,6 +719,13 @@ class HTMLReportController:
                 "default_selected": True
             },
             {
+                "id": "control_electropherograms",
+                "category": "Raw Data & QC",
+                "default_title": "Control Electropherograms Preview",
+                "getter": lambda: self._get_plot_controls(),
+                "default_selected": True
+            },
+            {
                 "id": "snr_plot",
                 "category": "Raw Data & QC",
                 "default_title": "Signal-to-Noise Ratio (SNR)",
@@ -891,7 +898,23 @@ class HTMLReportController:
     # ---------------- Plot Getters from Controllers ----------------
     def _get_plot_raw(self):
         state = self.controllers.get("state")
-        return getattr(state, "last_plot", None) if state else None
+        if not state:
+            return None
+        fig = getattr(state, "last_fig", None)
+        if fig is None:
+            fig = getattr(state, "last_plot", None)
+        if fig is None:
+            fig = extract_bokeh_figure(getattr(state, "plot_pane", None))
+        return fig
+
+    def _get_plot_controls(self):
+        state = self.controllers.get("state")
+        if not state:
+            return None
+        fig = getattr(state, "control_last_fig", None)
+        if fig is None:
+            fig = extract_bokeh_figure(getattr(state, "control_plot_pane", None))
+        return fig
 
     def _get_plot_snr(self):
         ctrl = self.controllers.get("snr")
