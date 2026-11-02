@@ -172,6 +172,32 @@ def get_divergent_palette(n: int = 256) -> List[str]:
         return _palette(n, force_name="vik")
     return _palette(n)
 
+def _extract_t_y(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract x/time and y/intensity arrays safely from any dataframe."""
+    cols_map = {str(c).lower().strip(): c for c in df.columns}
+
+    # Extract x
+    if "time" in cols_map:
+        t = df[cols_map["time"]].to_numpy()
+    elif "pseudotime" in cols_map:
+        t = df[cols_map["pseudotime"]].to_numpy()
+    elif len(df.columns) >= 2:
+        t = df.iloc[:, 0].to_numpy()
+    else:
+        t = df.index.to_numpy()
+
+    # Extract y
+    if "intensity" in cols_map:
+        y = df[cols_map["intensity"]].to_numpy()
+    elif "fluorescence" in cols_map:
+        y = df[cols_map["fluorescence"]].to_numpy()
+    elif len(df.columns) >= 2:
+        y = df.iloc[:, 1].to_numpy()
+    else:
+        y = df.iloc[:, 0].to_numpy()
+
+    return np.asarray(t, dtype=float), np.asarray(y, dtype=float)
+
 def make_preview_plot(samples_to_df: Dict[str, pd.DataFrame], *, minutes: bool, offset: float, title: str, asinh: bool = False) -> bokeh.plotting.Figure:
     n_samples = len(samples_to_df)
     ncols = 6
@@ -190,8 +216,7 @@ def make_preview_plot(samples_to_df: Dict[str, pd.DataFrame], *, minutes: bool, 
     )
     
     for i, (sample, df) in enumerate(samples_to_df.items()):
-        t = df["time"].to_numpy()
-        y = df["intensity"].to_numpy()
+        t, y = _extract_t_y(df)
         if asinh:
             y = np.arcsinh(y)
         y = y - i * offset
@@ -232,8 +257,7 @@ def plot_multi(samples_to_df: Dict[str, pd.DataFrame], title: str, *, xlab="time
         tools="pan,wheel_zoom,box_zoom,reset,save,hover",
     )
     for i, (sample, df) in enumerate(samples_to_df.items()):
-        t = df["time"].to_numpy()
-        y = df["intensity"].to_numpy()
+        t, y = _extract_t_y(df)
         if asinh:
             y = np.arcsinh(y)
         y = y - i * offset

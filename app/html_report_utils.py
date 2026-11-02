@@ -1280,11 +1280,15 @@ class HTMLReportController:
         if not ctrl:
             return None
         al_s = getattr(ctrl, "aligned_by_sample", None)
+        ash = getattr(getattr(ctrl, "aligned_asinh_toggle", None), "value", True)
+        off = offset if offset is not None else getattr(getattr(ctrl, "aligned_offset_slider", None), "value", 0.0)
+
         if offset is not None and al_s:
-            ash = getattr(getattr(ctrl, "aligned_asinh_toggle", None), "value", True)
-            return common_plot.plot_multi(al_s, title="Aligned Chromatograms", xlab="pseudotime", ylab="intensity (asinh)" if ash else "intensity (raw)", offset=offset, asinh=ash, line_width=2)
+            return common_plot.plot_multi(al_s, title="Aligned Chromatograms", xlab="pseudotime", ylab="intensity (asinh)" if ash else "intensity (raw)", offset=off, asinh=ash, line_width=2)
 
         fig = extract_bokeh_figure(getattr(ctrl, "aligned_pane", getattr(ctrl, "aligned_plot_pane", None)))
+        if fig is None and al_s:
+            return common_plot.plot_multi(al_s, title="Aligned Chromatograms", xlab="pseudotime", ylab="intensity (asinh)" if ash else "intensity (raw)", offset=off, asinh=ash, line_width=2)
         return fig
 
     def _get_plot_nmf_recon(self):
@@ -1904,6 +1908,8 @@ class HTMLReportController:
             size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{(size_kb/1024):.2f} MB"
             self.report_status.object = _ok(f"HTML Report generated successfully! Includes {plot_count} plots/figures ({size_str}). Click 'Download HTML Report' below.")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.download_report_btn.disabled = True
             self.report_status.object = _warn(f"Failed to generate report: {e}")
 
