@@ -542,6 +542,7 @@ class NMFMetaDashboardController:
         if self.svg_export.value:
             p.output_backend = "svg"
             
+        self.last_reg_fig = p
         pane = TitledPlotPane(p, title="Basis Regression Matrix", sizing_mode="fixed", width=850, height=600)
         self.basis_reg_container.clear()
         self.basis_reg_container.append(pane)
