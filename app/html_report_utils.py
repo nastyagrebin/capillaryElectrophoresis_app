@@ -548,124 +548,133 @@ def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float =
     return bokeh.layouts.column(slider, fig_or_layout, sizing_mode="stretch_width")
 
 
-class ReportOutlineWidget(pn.reactive.ReactiveHTML):
-    """Interactive drag-and-drop report outline widget allowing reordering, caption editing, and pruning."""
+class ReportOutlineWidget(pn.viewable.Viewer):
+    """Interactive report outline widget allowing reordering, caption editing, and pruning."""
     items = param.List(default=[])
 
-    _template = """
-    <div id="outline_container" style="display: flex; flex-direction: column; gap: 10px; width: 100%;">
-      {% for item in items %}
-      <div id="outline_item_{{ loop.index0 }}"
-           class="outline-card"
-           draggable="true"
-           ondragstart="${script('drag_start')}"
-           ondragover="${script('drag_over')}"
-           ondragleave="${script('drag_leave')}"
-           ondragend="${script('drag_end')}"
-           ondrop="${script('drop')}"
-           style="padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 8px; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: all 0.15s ease;">
-        
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
-          <div style="display: flex; align-items: center; gap: 10px; cursor: grab;">
-            <span style="color: #94a3b8; font-size: 1.1em; font-family: monospace; font-weight: bold; user-select: none;" title="Drag card to reorder">::</span>
-            <span style="font-weight: 600; color: #1e293b; font-size: 0.95em;">{{ loop.index }}. {{ item.title }}</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 6px;">
-            <span style="font-size: 0.75em; font-weight: 500; color: #475569; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; border: 1px solid #e2e8f0;">{{ item.category }}</span>
-            <button type="button" onclick="${script('move_up')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; cursor: pointer;">Move Up</button>
-            <button type="button" onclick="${script('move_down')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #334155; cursor: pointer;">Move Down</button>
-            <button type="button" onclick="${script('remove_item')}" data-idx="{{ loop.index0 }}" style="padding: 3px 8px; font-size: 0.78em; font-weight: 500; border: 1px solid #fca5a5; border-radius: 4px; background: #fef2f2; color: #b91c1c; cursor: pointer;">Remove</button>
-          </div>
-        </div>
+    def __init__(self, **params):
+        super().__init__(**params)
+        self._container = pn.Column(sizing_mode="stretch_width")
+        self._sync_ui()
 
-        <div style="margin-top: 6px;">
-          <label style="font-size: 0.8em; color: #64748b; font-weight: 500; display: block; margin-bottom: 3px;">Figure Caption (optional):</label>
-          <input type="text"
-                 id="caption_input_{{ loop.index0 }}"
-                 value="{{ item.caption }}"
-                 data-idx="{{ loop.index0 }}"
-                 onchange="${script('update_caption')}"
-                 placeholder="Enter optional caption for this figure..."
-                 style="width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.88em; border: 1px solid #cbd5e1; border-radius: 5px; color: #1e293b; background: #fcfcfd;" />
-        </div>
-      </div>
-      {% endfor %}
-      {% if not items %}
-      <div style="padding: 24px; text-align: center; border: 2px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; color: #64748b; font-style: italic;">
-        No figures or tables selected yet. Select standard plots above or add sub-plots to populate the report outline.
-      </div>
-      {% endif %}
-    </div>
-    """
+    @param.depends("items", watch=True)
+    def _sync_ui(self):
+        self._container.clear()
+        if not self.items:
+            self._container.append(
+                pn.pane.HTML(
+                    """<div style="padding: 24px; text-align: center; border: 2px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; color: #64748b; font-style: italic;">
+                    No figures or tables selected yet. Select standard plots above or add sub-plots to populate the report outline.
+                    </div>""",
+                    sizing_mode="stretch_width"
+                )
+            )
+            return
 
-    _scripts = {
-        'drag_start': """
-            event.dataTransfer.setData("text/plain", event.currentTarget.id);
-            event.dataTransfer.effectAllowed = "move";
-            event.currentTarget.style.opacity = "0.4";
-        """,
-        'drag_end': """
-            event.currentTarget.style.opacity = "1.0";
-        """,
-        'drag_over': """
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            event.currentTarget.style.borderColor = "#3b82f6";
-            event.currentTarget.style.background = "#eff6ff";
-        """,
-        'drag_leave': """
-            event.currentTarget.style.borderColor = "#cbd5e1";
-            event.currentTarget.style.background = "#ffffff";
-        """,
-        'drop': """
-            event.preventDefault();
-            event.currentTarget.style.borderColor = "#cbd5e1";
-            event.currentTarget.style.background = "#ffffff";
-            const srcId = event.dataTransfer.getData("text/plain");
-            const targetId = event.currentTarget.id;
-            if (!srcId || srcId === targetId) return;
-            const srcIdx = parseInt(srcId.replace("outline_item_", ""));
-            const targetIdx = parseInt(targetId.replace("outline_item_", ""));
-            if (isNaN(srcIdx) || isNaN(targetIdx)) return;
-            
-            const newItems = [...data.items];
-            const [moved] = newItems.splice(srcIdx, 1);
-            newItems.splice(targetIdx, 0, moved);
-            data.items = newItems;
-        """,
-        'move_up': """
-            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
-            if (isNaN(idx) || idx <= 0) return;
-            const newItems = [...data.items];
-            const temp = newItems[idx - 1];
-            newItems[idx - 1] = newItems[idx];
-            newItems[idx] = temp;
-            data.items = newItems;
-        """,
-        'move_down': """
-            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
-            if (isNaN(idx) || idx >= data.items.length - 1) return;
-            const newItems = [...data.items];
-            const temp = newItems[idx + 1];
-            newItems[idx + 1] = newItems[idx];
-            newItems[idx] = temp;
-            data.items = newItems;
-        """,
-        'remove_item': """
-            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
-            if (isNaN(idx)) return;
-            const newItems = [...data.items];
-            newItems.splice(idx, 1);
-            data.items = newItems;
-        """,
-        'update_caption': """
-            const idx = parseInt(event.currentTarget.getAttribute("data-idx"));
-            if (isNaN(idx) || idx >= data.items.length) return;
-            const newItems = [...data.items];
-            newItems[idx] = {...newItems[idx], caption: event.currentTarget.value};
-            data.items = newItems;
-        """
-    }
+        n = len(self.items)
+        pos_options = list(range(1, n + 1))
+
+        for idx, item in enumerate(self.items):
+            title = item.get("title", f"Figure {idx + 1}")
+            cat = item.get("category", "Pipeline Plot")
+            caption = item.get("caption", "")
+
+            title_md = pn.pane.Markdown(
+                f"<span style='color: #94a3b8; font-family: monospace; font-size: 1.1em; font-weight: bold; margin-right: 6px;'>::</span>"
+                f"**{idx + 1}. {title}** "
+                f"<span style='font-size: 0.75em; font-weight: 500; color: #475569; background: #f1f5f9; padding: 2px 8px; border-radius: 4px; border: 1px solid #e2e8f0; margin-left: 6px;'>{cat}</span>",
+                sizing_mode="stretch_width",
+                margin=(5, 0, 0, 0)
+            )
+
+            pos_select = pn.widgets.Select(
+                name="Move to",
+                options=pos_options,
+                value=idx + 1,
+                width=80,
+                margin=(0, 6, 0, 0)
+            )
+            btn_up = pn.widgets.Button(name="Move Up", width=80, disabled=(idx == 0), margin=(0, 4, 0, 0))
+            btn_down = pn.widgets.Button(name="Move Down", width=90, disabled=(idx == n - 1), margin=(0, 4, 0, 0))
+            btn_remove = pn.widgets.Button(name="Remove", button_type="danger", width=75, margin=(0, 0, 0, 0))
+
+            def make_pos_handler(curr_idx):
+                def _on_pos_change(event):
+                    target_pos = event.new - 1
+                    if target_pos != curr_idx:
+                        self._move_item(curr_idx, target_pos)
+                return _on_pos_change
+
+            def make_up_handler(curr_idx):
+                return lambda _: self._move_item(curr_idx, curr_idx - 1)
+
+            def make_down_handler(curr_idx):
+                return lambda _: self._move_item(curr_idx, curr_idx + 1)
+
+            def make_remove_handler(curr_idx):
+                return lambda _: self._remove_item(curr_idx)
+
+            pos_select.param.watch(make_pos_handler(idx), "value")
+            btn_up.on_click(make_up_handler(idx))
+            btn_down.on_click(make_down_handler(idx))
+            btn_remove.on_click(make_remove_handler(idx))
+
+            top_row = pn.Row(
+                title_md,
+                pos_select,
+                btn_up,
+                btn_down,
+                btn_remove,
+                sizing_mode="stretch_width",
+                align="center",
+                margin=(0, 0, 6, 0)
+            )
+
+            caption_input = pn.widgets.TextInput(
+                name="Figure Caption (optional)",
+                value=caption,
+                placeholder="Enter optional caption for this figure...",
+                sizing_mode="stretch_width"
+            )
+
+            def make_caption_handler(curr_idx):
+                def _on_caption_change(event):
+                    if curr_idx < len(self.items):
+                        self.items[curr_idx]["caption"] = event.new
+                return _on_caption_change
+
+            caption_input.param.watch(make_caption_handler(idx), "value")
+
+            card = pn.Column(
+                top_row,
+                caption_input,
+                styles={
+                    "padding": "12px 14px",
+                    "border": "1px solid #cbd5e1",
+                    "border-radius": "8px",
+                    "background": "#ffffff",
+                    "box-shadow": "0 1px 3px rgba(0,0,0,0.05)",
+                    "margin-bottom": "10px"
+                },
+                sizing_mode="stretch_width"
+            )
+            self._container.append(card)
+
+    def _move_item(self, from_idx: int, to_idx: int):
+        if 0 <= from_idx < len(self.items) and 0 <= to_idx < len(self.items):
+            new_items = list(self.items)
+            item = new_items.pop(from_idx)
+            new_items.insert(to_idx, item)
+            self.items = new_items
+
+    def _remove_item(self, idx: int):
+        if 0 <= idx < len(self.items):
+            new_items = list(self.items)
+            new_items.pop(idx)
+            self.items = new_items
+
+    def __panel__(self):
+        return self._container
 
 
 class HTMLReportController:
@@ -973,8 +982,9 @@ class HTMLReportController:
             # Card 6: Reordering Outline
             pn.pane.Markdown("### 6. Report Structure & Reordering Outline"),
             pn.pane.Markdown(
-                "Review the outline below. Drag and drop figure cards to reorder how they will appear in the generated "
-                "HTML report. You can also use the Move Up / Move Down buttons, edit figure captions inline, or remove figures. "
+                "Review the outline below. Reorder how figures and tables will appear in the generated "
+                "HTML report using the 'Move to' position dropdown or the 'Move Up' / 'Move Down' buttons. "
+                "You can edit figure captions inline or remove figures from the report. "
                 "Click 'Refresh Outline' to sync with the latest plot selections."
             ),
             pn.Row(self.refresh_outline_btn, self.outline_count_md, align="center"),
@@ -1030,7 +1040,7 @@ class HTMLReportController:
                 self.custom_images = [img for img in self.custom_images if img["id"] != rid]
                 self._render_custom_images_list()
 
-        self.outline_count_md.object = f"**{len(new_items)}** items in report outline (drag cards to reorder)"
+        self.outline_count_md.object = f"**{len(new_items)}** items in report outline (reorder using Move to / Up / Down)"
 
     def _refresh_outline(self):
         """Re-scan all active standard plots, sub-plots, custom images, and NMF groups into the outline."""
@@ -1144,7 +1154,7 @@ class HTMLReportController:
                 seen.add(cand["id"])
 
         self.outline_widget.items = merged_items
-        self.outline_count_md.object = f"**{len(merged_items)}** items in report outline (drag cards to reorder)"
+        self.outline_count_md.object = f"**{len(merged_items)}** items in report outline (reorder using Move to / Up / Down)"
 
     # ---------------- Standard Plot Registry ----------------
     def _init_standard_plot_definitions(self):
