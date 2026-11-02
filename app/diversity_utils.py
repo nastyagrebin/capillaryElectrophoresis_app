@@ -386,6 +386,14 @@ class DiversityController:
         self.plots_column = pn.Column(sizing_mode="stretch_width")
         self.sample_peaks_all: Dict[str, Tuple[np.ndarray, np.ndarray, List[Peak]]] = {}
 
+        self.html_plots = []
+        self.on_send_to_html = None
+
+        self.table_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.table_send_btn = pn.widgets.Button(name="Send Table to HTML", button_type="primary", disabled=True, width=150)
+        self.table_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.table_send_btn.on_click(self._on_send_table_to_html)
+
         self.csv_name = pn.widgets.TextInput(name="CSV filename", value="alpha_diversity.csv", width=260)
         self.csv_download = pn.widgets.FileDownload(
             label="Download Metrics CSV", filename=self.csv_name.value, button_type="primary",
@@ -417,7 +425,7 @@ class DiversityController:
             self.status,
             pn.layout.Divider(),
             self.table,
-            pn.Row(self.csv_name, pn.Spacer(width=12), self.csv_download),
+            pn.Row(self.csv_name, pn.Spacer(width=12), self.csv_download, pn.Spacer(width=20), self.table_caption, self.table_send_btn, self.table_send_status),
             pn.Row(self.peaks_csv_name, pn.Spacer(width=12), self.peaks_download),
             pn.layout.Divider(),
             pn.pane.Markdown("### Detected Peaks"),
@@ -637,10 +645,30 @@ class DiversityController:
                 p.ygrid.grid_line_color = None
                 plots.append(p)
                 
-            self.plots_column.objects = [TitledPlotPane(object=p, sizing_mode="stretch_width") for p in plots]
+            sample_cards = []
+            for name, p in zip(names, plots):
+                s_cap = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+                s_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", width=120)
+                s_st = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+                def _make_handler(s_name=name, s_fig=p, s_c=s_cap, s_s=s_st):
+                    def _h(_=None):
+                        self._send_sample_peak_to_html(s_name, s_fig, s_c.value.strip(), s_s)
+                    return _h
+                s_btn.on_click(_make_handler())
+                ctrl_row = pn.Row(
+                    pn.pane.Markdown(f"**Sample:** `{name}`", margin=(5, 10, 0, 0)),
+                    s_cap,
+                    s_btn,
+                    s_st,
+                    sizing_mode="stretch_width"
+                )
+                sample_cards.append(pn.Column(ctrl_row, TitledPlotPane(object=p, sizing_mode="stretch_width"), margin=(0, 0, 15, 0)))
+
+            self.plots_column.objects = sample_cards
             from common_plot import apply_export_prefix_to_pane
             prefix = getattr(self, "export_prefix", "CE_analysis")
             apply_export_prefix_to_pane(self.plots_column, prefix)
+            self.table_send_btn.disabled = False
 
             # Notify Viz tab to add these metrics for coloring
             if callable(self.on_updated):
@@ -655,7 +683,53 @@ class DiversityController:
             self.plots_column.objects = []
             self.sample_peaks_all = {}
             self.csv_download.disabled = True
+            self.table_send_btn.disabled = True
             self.status.object = warn(f"Computation failed: {e}")
+
+    def _send_plot_to_html(self, entry: dict, status_pane: pn.pane.Markdown):
+        existing_idx = None
+        for i, p in enumerate(self.html_plots):
+            if p.get("id") == entry.get("id"):
+                existing_idx = i
+                break
+        if existing_idx is not None:
+            self.html_plots[existing_idx] = entry
+        else:
+            self.html_plots.append(entry)
+
+        status_pane.object = f"**Sent '{entry.get('title', 'plot')}' to HTML Report export.**"
+        if callable(self.on_send_to_html):
+            try:
+                self.on_send_to_html(entry)
+            except Exception as e:
+                print(f"[DiversityController] Failed to send plot to HTML report controller: {e}")
+
+    def _send_sample_peak_to_html(self, sample_name: str, fig, caption: str, status_pane: pn.pane.Markdown):
+        import re
+        safe_s = re.sub(r'[^a-zA-Z0-9_]', '_', sample_name)
+        entry = {
+            "id": f"alpha_peak_{safe_s}",
+            "type": "alpha_peak_detection",
+            "category": "Alpha Diversity",
+            "title": f"Peak Detection: {sample_name}",
+            "figure": fig,
+            "caption": caption
+        }
+        self._send_plot_to_html(entry, status_pane)
+
+    def _on_send_table_to_html(self, _=None):
+        if self.metrics_df is None or self.metrics_df.empty:
+            return
+        entry = {
+            "id": "alpha_div_table_custom",
+            "type": "alpha_table",
+            "category": "Alpha Diversity",
+            "title": "Alpha Diversity Metrics Table",
+            "figure": None,
+            "alpha_table_data": self.metrics_df.copy(),
+            "caption": self.table_caption.value.strip() if self.table_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.table_send_status)
 
     def get_sample_peak_plot(self, sample_name: str, use_asinh: Optional[bool] = None):
         """

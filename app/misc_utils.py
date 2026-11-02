@@ -91,6 +91,7 @@ class MiscController:
         # Continuous vs Continuous
         self.cvc_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cvc_btn.on_click(self._update_cvc)
+        self.cvc_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
         self.cvc_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
         self.cvc_send_btn.on_click(self._on_send_cvc_to_html)
         self.cvc_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
@@ -108,6 +109,7 @@ class MiscController:
         # Categorical vs Continuous
         self.cat_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cat_btn.on_click(self._update_cat)
+        self.cat_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
         self.cat_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
         self.cat_send_btn.on_click(self._on_send_cat_to_html)
         self.cat_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
@@ -122,6 +124,7 @@ class MiscController:
         # Regression Matrix
         self.reg_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.reg_btn.on_click(self._update_reg)
+        self.reg_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
         self.reg_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
         self.reg_send_btn.on_click(self._on_send_reg_to_html)
         self.reg_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
@@ -133,6 +136,7 @@ class MiscController:
         # Categorical Covariance Matrix
         self.cat_cov_btn = pn.widgets.Button(name="Visualize", button_type="success")
         self.cat_cov_btn.on_click(self._update_cat_cov)
+        self.cat_cov_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
         self.cat_cov_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
         self.cat_cov_send_btn.on_click(self._on_send_cat_cov_to_html)
         self.cat_cov_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
@@ -166,22 +170,22 @@ class MiscController:
             pn.Row(self.svg_export),
             pn.pane.Markdown("### Continuous vs Continuous"),
             pn.Row(self.cvc_x, self.cvc_y, self.cvc_color, pn.Column("Color mode:", self.cvc_color_mode)),
-            pn.Row(self.cvc_corr, self.cvc_reg, pn.Spacer(width=12), self.cvc_btn, self.cvc_send_btn, self.cvc_send_status),
+            pn.Row(self.cvc_corr, self.cvc_reg, pn.Spacer(width=12), self.cvc_btn, self.cvc_caption, self.cvc_send_btn, self.cvc_send_status),
             self.cvc_stats_pane,
             self.cvc_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Categorical vs Continuous"),
             pn.Row(self.cat_x, self.cat_y),
-            pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn, self.cat_send_btn, self.cat_send_status),
+            pn.Row(self.cat_stat, self.cat_fdr, pn.Spacer(width=12), self.cat_btn, self.cat_caption, self.cat_send_btn, self.cat_send_status),
             self.cat_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Regression Matrix (Continuous)"),
-            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_show_overlay, self.reg_btn, self.reg_send_btn, self.reg_send_status),
+            pn.Row(self.reg_vars, pn.Spacer(width=12), self.reg_show_overlay, self.reg_btn, self.reg_caption, self.reg_send_btn, self.reg_send_status),
             self.reg_status,
             self.reg_plot_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### Covariance Matrix (Categorical)"),
-            pn.Row(self.cat_cov_vars, pn.Spacer(width=12), self.cat_cov_show_overlay, self.cat_cov_btn, self.cat_cov_send_btn, self.cat_cov_send_status),
+            pn.Row(self.cat_cov_vars, pn.Spacer(width=12), self.cat_cov_show_overlay, self.cat_cov_btn, self.cat_cov_caption, self.cat_cov_send_btn, self.cat_cov_send_status),
             self.cat_cov_status,
             self.cat_cov_plot_pane,
             sizing_mode="stretch_width"
@@ -799,7 +803,7 @@ class MiscController:
             "id": f"misc_cvc_{safe_x}_{safe_y}",
             "title": title,
             "figure": self.last_cvc_fig,
-            "caption": f"Scatter plot of {y_col} vs {x_col}."
+            "caption": self.cvc_caption.value.strip() if self.cvc_caption.value else ""
         }
         self._send_plot_to_html(entry, self.cvc_send_status)
 
@@ -816,7 +820,7 @@ class MiscController:
             "id": f"misc_cat_{safe_x}_{safe_y}",
             "title": title,
             "figure": self.last_cat_fig,
-            "caption": f"Categorical comparison of {y_col} grouped by {x_col}."
+            "caption": self.cat_caption.value.strip() if self.cat_caption.value else ""
         }
         self._send_plot_to_html(entry, self.cat_send_status)
 
@@ -831,7 +835,7 @@ class MiscController:
             "id": f"misc_reg_{vars_tag}",
             "title": title,
             "figure": self.last_reg_fig,
-            "caption": "Linear regression correlation matrix among continuous variables."
+            "caption": self.reg_caption.value.strip() if self.reg_caption.value else ""
         }
         self._send_plot_to_html(entry, self.reg_send_status)
 
@@ -846,7 +850,7 @@ class MiscController:
             "id": f"misc_cat_cov_{vars_tag}",
             "title": title,
             "figure": self.last_cat_cov_fig,
-            "caption": "Categorical covariance matrix using Cramér's V."
+            "caption": self.cat_cov_caption.value.strip() if self.cat_cov_caption.value else ""
         }
         self._send_plot_to_html(entry, self.cat_cov_send_status)
 

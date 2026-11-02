@@ -1282,7 +1282,10 @@ html_controllers = {
     "timeseries": timeseries_ctrl,
 }
 html_report_section, html_report_ctrl = build_html_report_section(html_controllers)
-misc_ctrl.on_send_to_html = html_report_ctrl.add_misc_plot
+misc_ctrl.on_send_to_html = html_report_ctrl.add_pipeline_plot
+viz_ctrl.on_send_to_html = html_report_ctrl.add_pipeline_plot
+diversity_ctrl.on_send_to_html = html_report_ctrl.add_pipeline_plot
+timeseries_ctrl.on_send_to_html = html_report_ctrl.add_pipeline_plot
 
 TABS = pn.Tabs(
     ("Upload", upload_tab),

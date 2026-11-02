@@ -106,6 +106,53 @@ class VizController:
         
         self.svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
 
+        self.html_plots = []
+        self.on_send_to_html = None
+
+        # ---- PCA controls/plot ----
+        self.pca_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.pca_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.pca_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_pca_fig = None
+        self.pca_send_btn.on_click(self._on_send_pca_to_html)
+
+        self.pls_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.pls_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.pls_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_pls_fig = None
+        self.pls_send_btn.on_click(self._on_send_pls_to_html)
+
+        self.scree_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.scree_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.scree_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_scree_fig = None
+        self.scree_send_btn.on_click(self._on_send_scree_to_html)
+
+        self.loadings_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.loadings_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.loadings_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_loadings_fig = None
+        self.loadings_send_btn.on_click(self._on_send_loadings_to_html)
+
+        # ---- MDS controls/plot ----
+        self.mds_metric = pn.widgets.Select(name="MDS metric", options=["cosine", "euclidean"], value="euclidean", width=160)
+        self.mds_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.mds_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.mds_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_mds_fig = None
+        self.mds_send_btn.on_click(self._on_send_mds_to_html)
+        self.mds_pane = TitledPlotPane(sizing_mode="stretch_width")
+
+        # ---- t-SNE controls/plot ----
+        self.tsne_perp = pn.widgets.FloatSlider(name="t-SNE perplexity", start=5.0, end=50.0, step=1.0, value=9.0, width=280)
+        self.tsne_metric = pn.widgets.Select(name="t-SNE metric", options=["cosine", "euclidean"], value="cosine", width=160)
+        self.tsne_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.tsne_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.tsne_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_tsne_fig = None
+        self.tsne_send_btn.on_click(self._on_send_tsne_to_html)
+        self.tsne_pane = TitledPlotPane(sizing_mode="stretch_width")
+
         self.visualize_btn = pn.widgets.Button(name="Visualize", button_type="success", disabled=True)
         self.status = pn.pane.Markdown("", sizing_mode="fixed")
 
@@ -119,15 +166,6 @@ class VizController:
         self.pls_pane = TitledPlotPane(sizing_mode="stretch_width")
         self.pca_scree_pane = TitledPlotPane(sizing_mode="stretch_width")
         self.pc_loadings_pane = TitledPlotPane(sizing_mode="stretch_width")
-        
-        # ---- MDS controls/plot ----
-        self.mds_metric = pn.widgets.Select(name="MDS metric", options=["cosine", "euclidean"], value="euclidean", width=160)
-        self.mds_pane = TitledPlotPane(sizing_mode="stretch_width")
-
-        # ---- t-SNE controls/plot ----
-        self.tsne_perp = pn.widgets.FloatSlider(name="t-SNE perplexity", start=5.0, end=50.0, step=1.0, value=9.0, width=280)
-        self.tsne_metric = pn.widgets.Select(name="t-SNE metric", options=["cosine", "euclidean"], value="cosine", width=160)
-        self.tsne_pane = TitledPlotPane(sizing_mode="stretch_width")
 
         # Layout
         self.section = pn.Column(
@@ -155,18 +193,22 @@ class VizController:
 
             pn.pane.Markdown("### PCA / PLS-DA of NMF loadings (colored)"),
             pn.Row(self.pca_n, pn.Spacer(width=10), self.pca_x, pn.Spacer(width=10), self.pca_y, pn.Spacer(width=10), self.pls_x, pn.Spacer(width=10), self.pls_y),
+            pn.Row(self.pca_caption, self.pca_send_btn, self.pca_send_status),
             self.pca_pane,
+            pn.Row(self.pls_caption, self.pls_send_btn, self.pls_send_status),
             self.pls_pane,
             pn.pane.Markdown("#### PCA scree & PC loadings"),
+            pn.Row(self.scree_caption, self.scree_send_btn, self.scree_send_status),
             self.pca_scree_pane,
+            pn.Row(self.loadings_caption, self.loadings_send_btn, self.loadings_send_status),
             self.pc_loadings_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### MDS (2D)"),
-            pn.Row(self.mds_metric),
+            pn.Row(self.mds_metric, pn.Spacer(width=12), self.mds_caption, self.mds_send_btn, self.mds_send_status),
             self.mds_pane,
             pn.layout.Divider(),
             pn.pane.Markdown("### t-SNE (2D)"),
-            pn.Row(self.tsne_perp, pn.Spacer(width=20), self.tsne_metric),
+            pn.Row(self.tsne_perp, pn.Spacer(width=20), self.tsne_metric, pn.Spacer(width=12), self.tsne_caption, self.tsne_send_btn, self.tsne_send_status),
             self.tsne_pane,
             self.status,
             sizing_mode="stretch_width",
@@ -631,12 +673,18 @@ class VizController:
             
             self.pca_pane.object = p
             self.pls_pane.object = pls_p
+            self.last_pca_fig = p
+            self.pca_send_btn.disabled = False
             if pls_p is None:
                 self.pls_pane.visible = False
+                self.pls_send_btn.disabled = True
             else:
                 self.pls_pane.visible = True
+                self.last_pls_fig = pls_p
+                self.pls_send_btn.disabled = False
 
             # CEtools pca_viz subplots, suppress external show
+            scree_fig = None
             try:
                 from CEtools import pca_viz as pv
                 with no_bokeh_show():
@@ -644,18 +692,28 @@ class VizController:
                 if scree_fig.legend:
                     scree_fig.legend.location = "center_right"
                 self.pca_scree_pane.object = scree_fig
+                self.last_scree_fig = scree_fig
+                self.scree_send_btn.disabled = False
             except Exception as e:
                 self.pca_scree_pane.object = None
+                self.last_scree_fig = None
+                self.scree_send_btn.disabled = True
                 self.status.object = warn(f"PCA scree failed: {e}")
 
+            load_fig = None
             try:
+                from CEtools import pca_viz as pv
                 with no_bokeh_show():
                     _, load_fig = pv.plot_pc_loadings_bar_bokeh(
                         pca, pc=int(self.pca_x.value), kind="line"
                     )
                 self.pc_loadings_pane.object = load_fig
+                self.last_loadings_fig = load_fig
+                self.loadings_send_btn.disabled = False
             except Exception as e:
                 self.pc_loadings_pane.object = None
+                self.last_loadings_fig = None
+                self.loadings_send_btn.disabled = True
                 self.status.object = warn(f"PC loadings plot failed: {e}")
 
             from common_plot import apply_export_prefix_to_pane
@@ -731,11 +789,15 @@ class VizController:
                 mds_fig.title.text += f" — colored by {str(color_var)[:20]}"
                 
             self.mds_pane.object = mds_fig
+            self.last_mds_fig = mds_fig
+            self.mds_send_btn.disabled = False
             from common_plot import apply_export_prefix_to_pane
             prefix = getattr(self, "export_prefix", "CE_analysis")
             apply_export_prefix_to_pane(self.mds_pane, prefix)
         except Exception as e:
             self.mds_pane.object = None
+            self.last_mds_fig = None
+            self.mds_send_btn.disabled = True
             self.status.object = warn(f"MDS failed: {e}")
 
     def _update_tsne(self):
@@ -800,12 +862,146 @@ class VizController:
                 tsne_fig.title.text += f" — colored by {str(color_var)[:20]}"
                 
             self.tsne_pane.object = tsne_fig
+            self.last_tsne_fig = tsne_fig
+            self.tsne_send_btn.disabled = False
             from common_plot import apply_export_prefix_to_pane
             prefix = getattr(self, "export_prefix", "CE_analysis")
             apply_export_prefix_to_pane(self.tsne_pane, prefix)
         except Exception as e:
             self.tsne_pane.object = None
+            self.last_tsne_fig = None
+            self.tsne_send_btn.disabled = True
             self.status.object = warn(f"t-SNE failed: {e}")
+
+    def _send_plot_to_html(self, entry: dict, status_pane: pn.pane.Markdown):
+        existing_idx = None
+        for i, p in enumerate(self.html_plots):
+            if p.get("id") == entry.get("id"):
+                existing_idx = i
+                break
+        if existing_idx is not None:
+            self.html_plots[existing_idx] = entry
+        else:
+            self.html_plots.append(entry)
+
+        status_pane.object = f"**Sent '{entry.get('title', 'plot')}' to HTML Report export.**"
+        if callable(self.on_send_to_html):
+            try:
+                self.on_send_to_html(entry)
+            except Exception as e:
+                print(f"[VizController] Failed to send plot to HTML report controller: {e}")
+
+    def _on_send_pca_to_html(self, _=None):
+        if self.last_pca_fig is None:
+            return
+        fig = self.last_pca_fig
+        fig.frame_width = 450
+        fig.frame_height = 450
+        fig.match_aspect = True
+        fig.aspect_ratio = 1.0
+        fig.sizing_mode = None
+        pcx = int(self.pca_x.value)
+        pcy = int(self.pca_y.value)
+        title = f"PCA of NMF loadings (PC{pcx} vs PC{pcy})"
+        entry = {
+            "id": f"viz_pca_pc{pcx}_pc{pcy}",
+            "type": "viz_pca",
+            "category": "Dimensionality Reduction",
+            "title": title,
+            "figure": fig,
+            "caption": self.pca_caption.value.strip() if self.pca_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.pca_send_status)
+
+    def _on_send_pls_to_html(self, _=None):
+        if self.last_pls_fig is None:
+            return
+        fig = self.last_pls_fig
+        fig.frame_width = 450
+        fig.frame_height = 450
+        fig.match_aspect = True
+        fig.aspect_ratio = 1.0
+        fig.sizing_mode = None
+        lv_x = int(self.pls_x.value)
+        lv_y = int(self.pls_y.value)
+        title = f"PLS-DA of NMF loadings (LV{lv_x} vs LV{lv_y})"
+        entry = {
+            "id": f"viz_pls_lv{lv_x}_lv{lv_y}",
+            "type": "viz_pls",
+            "category": "Dimensionality Reduction",
+            "title": title,
+            "figure": fig,
+            "caption": self.pls_caption.value.strip() if self.pls_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.pls_send_status)
+
+    def _on_send_scree_to_html(self, _=None):
+        if self.last_scree_fig is None:
+            return
+        entry = {
+            "id": "viz_scree_plot",
+            "type": "viz_scree",
+            "category": "Dimensionality Reduction",
+            "title": "PCA Scree Plot (Explained Variance)",
+            "figure": self.last_scree_fig,
+            "caption": self.scree_caption.value.strip() if self.scree_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.scree_send_status)
+
+    def _on_send_loadings_to_html(self, _=None):
+        if self.last_loadings_fig is None:
+            return
+        pc = int(self.pca_x.value)
+        entry = {
+            "id": f"viz_loadings_pc{pc}",
+            "type": "viz_loadings",
+            "category": "Dimensionality Reduction",
+            "title": f"PC Loadings (PC{pc})",
+            "figure": self.last_loadings_fig,
+            "caption": self.loadings_caption.value.strip() if self.loadings_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.loadings_send_status)
+
+    def _on_send_mds_to_html(self, _=None):
+        if self.last_mds_fig is None:
+            return
+        fig = self.last_mds_fig
+        fig.frame_width = 450
+        fig.frame_height = 450
+        fig.match_aspect = True
+        fig.aspect_ratio = 1.0
+        fig.sizing_mode = None
+        metric = str(self.mds_metric.value)
+        entry = {
+            "id": f"viz_mds_{metric}",
+            "type": "viz_mds",
+            "category": "Dimensionality Reduction",
+            "title": f"MDS (2D) - {metric}",
+            "figure": fig,
+            "caption": self.mds_caption.value.strip() if self.mds_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.mds_send_status)
+
+    def _on_send_tsne_to_html(self, _=None):
+        if self.last_tsne_fig is None:
+            return
+        fig = self.last_tsne_fig
+        fig.frame_width = 450
+        fig.frame_height = 450
+        fig.match_aspect = True
+        fig.aspect_ratio = 1.0
+        fig.sizing_mode = None
+        metric = str(self.tsne_metric.value)
+        perp = float(self.tsne_perp.value)
+        entry = {
+            "id": f"viz_tsne_{metric}_{int(perp)}",
+            "type": "viz_tsne",
+            "category": "Dimensionality Reduction",
+            "title": f"t-SNE (2D) - {metric} (perp={perp:.0f})",
+            "figure": fig,
+            "caption": self.tsne_caption.value.strip() if self.tsne_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.tsne_send_status)
 
 # Public factory
 def build_viz_section():

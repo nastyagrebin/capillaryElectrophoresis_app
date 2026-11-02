@@ -1763,11 +1763,13 @@ class HTMLReportController:
                     disabled=not ready,
                     width=300
                 )
-                title_inp = pn.widgets.TextInput(
-                    value=it["default_title"],
+                caption_inp = pn.widgets.TextInput(
+                    placeholder="Optional caption...",
+                    value="",
                     sizing_mode="stretch_width",
-                    disabled=not ready
+                    disabled=not (ready and it.get("default_selected", False))
                 )
+                chk.param.watch(lambda e, ci=caption_inp, r=ready: setattr(ci, "disabled", not (e.new and r)), "value")
 
                 offset_slider = None
                 if it.get("has_offset"):
@@ -1794,13 +1796,14 @@ class HTMLReportController:
 
                 self._standard_plot_widgets[it["id"]] = {
                     "checkbox": chk,
-                    "title_input": title_inp,
+                    "title_input": caption_inp,
+                    "caption_input": caption_inp,
                     "offset_slider": offset_slider,
                     "getter": it["getter"],
                     "category": cat_name,
                     "is_ready": ready
                 }
-                row_items = [chk, badge, title_inp]
+                row_items = [chk, badge, caption_inp]
                 if offset_slider is not None:
                     row_items.append(offset_slider)
                 rows.append(pn.Row(*row_items, sizing_mode="stretch_width", margin=(2, 0, 2, 0)))
@@ -1817,22 +1820,31 @@ class HTMLReportController:
         # Update sub-plot dropdown options
         self._update_dropdowns()
 
-        # Sync any plots sent from Miscellaneous tab
-        misc_ctrl = self.controllers.get("misc")
-        if misc_ctrl and hasattr(misc_ctrl, "html_plots"):
-            existing_ids = {p["id"] for p in self.additional_pipeline_plots}
-            for p in misc_ctrl.html_plots:
-                if p["id"] not in existing_ids:
-                    self.additional_pipeline_plots.append({
-                        "id": p["id"],
-                        "type": "misc_plot",
-                        "category": "Miscellaneous Analyses",
-                        "title": p["title"],
-                        "caption": p.get("caption", ""),
-                        "figure": p["figure"],
-                        "details": f"Miscellaneous ({p['title']})"
-                    })
-            self._render_additional_plots_list()
+        # Sync any plots sent from pipeline tabs (Misc, Viz, Diversity, TimeSeries)
+        for ctrl_name, cat_default in [
+            ("misc", "Miscellaneous Analyses"),
+            ("viz", "Dimensionality Reduction"),
+            ("diversity", "Alpha Diversity"),
+            ("timeseries", "Time Series & Pseudotime")
+        ]:
+            ctrl = self.controllers.get(ctrl_name)
+            if ctrl and hasattr(ctrl, "html_plots"):
+                existing_ids = {p["id"] for p in self.additional_pipeline_plots}
+                for p in ctrl.html_plots:
+                    if p["id"] not in existing_ids:
+                        entry = {
+                            "id": p["id"],
+                            "type": p.get("type", "custom_plot"),
+                            "category": p.get("category", cat_default),
+                            "title": p["title"],
+                            "caption": p.get("caption", ""),
+                            "figure": p.get("figure"),
+                            "details": f"{p.get('category', cat_default)} ({p['title']})"
+                        }
+                        if "alpha_table_data" in p:
+                            entry["alpha_table_data"] = p["alpha_table_data"]
+                        self.additional_pipeline_plots.append(entry)
+        self._render_additional_plots_list()
 
     def _set_all_selected(self, select: bool):
         for data in self._standard_plot_widgets.values():
@@ -2230,13 +2242,15 @@ class HTMLReportController:
         except Exception as e:
             self.report_status.object = _warn(f"Failed to generate {method} plot: {e}")
 
-    def add_misc_plot(self, plot_dict: Dict[str, Any]):
-        """Receive a plot sent from the Miscellaneous tab via 'Send to HTML'."""
+    def add_pipeline_plot(self, plot_dict: Dict[str, Any]):
+        """Receive a plot sent from any tab (Misc, Viz, Diversity, TimeSeries) via 'Send to HTML'."""
         fig = plot_dict.get("figure")
-        if fig is None:
+        has_table = "alpha_table_data" in plot_dict
+        if fig is None and not has_table:
             return
-        item_id = plot_dict.get("id") or f"sub_misc_{len(self.additional_pipeline_plots)+1}"
-        title = plot_dict.get("title", "Miscellaneous Plot")
+        category = plot_dict.get("category", "Miscellaneous Analyses")
+        item_id = plot_dict.get("id") or f"sub_{re.sub(r'[^a-zA-Z0-9_]', '_', category.lower())}_{len(self.additional_pipeline_plots)+1}"
+        title = plot_dict.get("title", "Analysis Plot")
         caption = plot_dict.get("caption", "")
 
         for p in self.additional_pipeline_plots:
@@ -2244,21 +2258,30 @@ class HTMLReportController:
                 p["figure"] = fig
                 p["title"] = title
                 p["caption"] = caption
+                p["category"] = category
+                if has_table:
+                    p["alpha_table_data"] = plot_dict["alpha_table_data"]
                 self._render_additional_plots_list()
-                self.report_status.object = _ok(f"Updated '{title}' in report (Miscellaneous Analyses).")
+                self.report_status.object = _ok(f"Updated '{title}' in report ({category}).")
                 return
 
-        self.additional_pipeline_plots.append({
+        entry = {
             "id": item_id,
-            "type": "misc_plot",
-            "category": "Miscellaneous Analyses",
+            "type": plot_dict.get("type", "custom_plot"),
+            "category": category,
             "title": title,
             "caption": caption,
             "figure": fig,
-            "details": f"Miscellaneous ({title})"
-        })
+            "details": f"{category} ({title})"
+        }
+        if has_table:
+            entry["alpha_table_data"] = plot_dict["alpha_table_data"]
+        self.additional_pipeline_plots.append(entry)
         self._render_additional_plots_list()
-        self.report_status.object = _ok(f"Added '{title}' to report (Miscellaneous Analyses).")
+        self.report_status.object = _ok(f"Added '{title}' to report ({category}).")
+
+    def add_misc_plot(self, plot_dict: Dict[str, Any]):
+        self.add_pipeline_plot(plot_dict)
 
     def _compute_custom_viz_plot(
         self,
@@ -2660,7 +2683,7 @@ class HTMLReportController:
             if pid in self._standard_plot_widgets:
                 w = self._standard_plot_widgets[pid]
                 if w["checkbox"].value and w["is_ready"]:
-                    user_title = w["title_input"].value or item["default_title"]
+                    user_caption = w["caption_input"].value.strip() if ("caption_input" in w and w["caption_input"].value) else ""
                     offset_val = w["offset_slider"].value if "offset_slider" in w and w["offset_slider"] is not None else None
                     if offset_val is not None:
                         res = w["getter"](offset=offset_val)
@@ -2672,19 +2695,19 @@ class HTMLReportController:
                             selected_standard_plots.append({
                                 "id": pid,
                                 "category": item["category"],
-                                "title": user_title,
+                                "title": item["default_title"],
                                 "snr_data": res,
                                 "figure": None,
-                                "caption": ""
+                                "caption": user_caption
                             })
                         elif isinstance(res, dict) and res.get("type") == "alpha_table":
                             selected_standard_plots.append({
                                 "id": pid,
                                 "category": item["category"],
-                                "title": user_title,
+                                "title": item["default_title"],
                                 "alpha_table_data": res,
                                 "figure": None,
-                                "caption": ""
+                                "caption": user_caption
                             })
                         else:
                             fig_to_use = res
@@ -2697,9 +2720,9 @@ class HTMLReportController:
                             selected_standard_plots.append({
                                 "id": pid,
                                 "category": item["category"],
-                                "title": user_title,
+                                "title": item["default_title"],
                                 "figure": fig_to_use,
-                                "caption": ""
+                                "caption": user_caption
                             })
 
         # 2. Collect nested NMF Group Statistics
@@ -2747,33 +2770,53 @@ class HTMLReportController:
                 # Log error and continue
                 print(f"[HTML Report] Error computing NMF stats for '{col_name}': {e}")
 
-        # Sync any plots sent from Miscellaneous tab
-        misc_ctrl = self.controllers.get("misc")
-        if misc_ctrl and hasattr(misc_ctrl, "html_plots"):
-            existing_ids = {p["id"] for p in self.additional_pipeline_plots}
-            for p in misc_ctrl.html_plots:
-                if p["id"] not in existing_ids:
-                    self.additional_pipeline_plots.append({
-                        "id": p["id"],
-                        "type": "misc_plot",
-                        "category": "Miscellaneous Analyses",
-                        "title": p["title"],
-                        "caption": p.get("caption", ""),
-                        "figure": p["figure"],
-                        "details": f"Miscellaneous ({p['title']})"
-                    })
+        # Sync any plots sent from pipeline tabs (Misc, Viz, Diversity, TimeSeries)
+        for ctrl_name, cat_default in [
+            ("misc", "Miscellaneous Analyses"),
+            ("viz", "Dimensionality Reduction"),
+            ("diversity", "Alpha Diversity"),
+            ("timeseries", "Time Series & Pseudotime")
+        ]:
+            ctrl = self.controllers.get(ctrl_name)
+            if ctrl and hasattr(ctrl, "html_plots"):
+                existing_ids = {p["id"] for p in self.additional_pipeline_plots}
+                for p in ctrl.html_plots:
+                    if p["id"] not in existing_ids:
+                        entry = {
+                            "id": p["id"],
+                            "type": p.get("type", "custom_plot"),
+                            "category": p.get("category", cat_default),
+                            "title": p["title"],
+                            "caption": p.get("caption", ""),
+                            "figure": p.get("figure"),
+                            "details": f"{p.get('category', cat_default)} ({p['title']})"
+                        }
+                        if "alpha_table_data" in p:
+                            entry["alpha_table_data"] = p["alpha_table_data"]
+                        self.additional_pipeline_plots.append(entry)
 
         # 3. Collect additional subplots
         selected_sub_plots = []
         for sp in self.additional_pipeline_plots:
             fig = sp.get("figure", sp.get("fig"))
-            if fig is not None:
+            has_table = "alpha_table_data" in sp
+            if fig is not None or has_table:
                 p_cat = sp.get("category")
-                if p_cat in ["Alpha Diversity", "Dimensionality Reduction", "Visualization", "Miscellaneous Analyses", "Miscellaneous"]:
+                if p_cat in [
+                    "Alpha Diversity",
+                    "Dimensionality Reduction",
+                    "Visualization",
+                    "Miscellaneous Analyses",
+                    "Miscellaneous",
+                    "Time Series & Pseudotime",
+                    "Time Series"
+                ]:
                     if p_cat == "Visualization":
                         target_cat = "Dimensionality Reduction"
                     elif p_cat == "Miscellaneous":
                         target_cat = "Miscellaneous Analyses"
+                    elif p_cat == "Time Series":
+                        target_cat = "Time Series & Pseudotime"
                     else:
                         target_cat = p_cat
                     selected_standard_plots.append({
@@ -2781,7 +2824,8 @@ class HTMLReportController:
                         "category": target_cat,
                         "title": sp["title"],
                         "figure": fig,
-                        "caption": sp.get("caption", "")
+                        "caption": sp.get("caption", ""),
+                        "alpha_table_data": sp.get("alpha_table_data")
                     })
                 else:
                     selected_sub_plots.append({
@@ -2789,7 +2833,8 @@ class HTMLReportController:
                         "category": "Additional Pipeline Sub-Plots",
                         "title": sp["title"],
                         "figure": fig,
-                        "caption": sp.get("caption", "")
+                        "caption": sp.get("caption", ""),
+                        "alpha_table_data": sp.get("alpha_table_data")
                     })
 
         # Count total items
@@ -2907,7 +2952,8 @@ class HTMLReportController:
             "NMF Decomposition",
             "Alpha Diversity",
             "Dimensionality Reduction",
-            "Miscellaneous Analyses"
+            "Miscellaneous Analyses",
+            "Time Series & Pseudotime"
         ]
         ordered_cat_names = [c for c in category_order if c in categories_dict] + [c for c in categories_dict if c not in category_order]
 
@@ -2929,27 +2975,29 @@ class HTMLReportController:
             for it in items:
                 card_id = f"card-{it['id']}"
                 sub_links.append(f"<li><a href='#{card_id}'>{it['title']}</a></li>")
+                caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it.get("caption") else ""
 
-                if it.get("snr_data"):
+                if it.get("snr_data") is not None:
                     snr_content = self._format_snr_html(it["snr_data"])
                     sec_html += f"""
                 <div class="plot-card" id="{card_id}">
                     <h3 class="plot-title">{it['title']}</h3>
                     {snr_content}
+                    {caption_html}
                 </div>
                 """
-                elif it.get("alpha_table_data"):
+                elif it.get("alpha_table_data") is not None:
                     alpha_content = self._format_alpha_div_table_html(it["alpha_table_data"])
                     sec_html += f"""
                 <div class="plot-card" id="{card_id}">
                     <h3 class="plot-title">{it['title']}</h3>
                     {alpha_content}
+                    {caption_html}
                 </div>
                 """
                 else:
                     plot_key = f"std_{it['id']}"
                     div_html = divs.get(plot_key, "")
-                    caption_html = f"<p class='plot-caption'>{it['caption']}</p>" if it.get("caption") else ""
                     sec_html += f"""
                 <div class="plot-card" id="{card_id}">
                     <h3 class="plot-title">{it['title']}</h3>

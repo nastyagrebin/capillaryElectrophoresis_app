@@ -56,8 +56,15 @@ class TimeSeriesController:
         self.ts_patient = pn.widgets.Select(name="Patient ID", options=[], width=150)
         self.ts_color = pn.widgets.Select(name="Color by (Categorical)", options=[], width=150)
         
+        self.html_plots = []
+        self.on_send_to_html = None
+
         self.plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=600)
         self.last_traj_fig = None
+        self.ts_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.ts_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.ts_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.ts_send_btn.on_click(self._on_send_ts_to_html)
 
         # Timepoint Change Sub-plot UI (Section 3)
         self.enable_change_plot = pn.widgets.Checkbox(name="Enable Timepoint Change Sub-Plot", value=False)
@@ -71,9 +78,19 @@ class TimeSeriesController:
         self.change_plot_status = pn.pane.Markdown("", visible=False)
         self.change_plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=480, visible=False)
         self.last_change_fig = None
+        self.change_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.change_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.change_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.change_send_btn.on_click(self._on_send_change_to_html)
 
         self.change_plot_controls_row = pn.Row(self.change_t_a, self.change_t_b, self.change_cat_timing, visible=False)
-        self.change_plot_stat_row = pn.Row(pn.Column("Significance Test:", self.change_stat), pn.Column("Correction:", self.change_fdr), pn.Column("Export:", self.change_svg_export), visible=False)
+        self.change_plot_stat_row = pn.Row(
+            pn.Column("Significance Test:", self.change_stat),
+            pn.Column("Correction:", self.change_fdr),
+            pn.Column("Export:", self.change_svg_export),
+            visible=False
+        )
+        self.change_send_row = pn.Row(self.change_caption, self.change_send_btn, self.change_send_status, visible=False)
         self.change_plot_section = pn.Column(
             pn.layout.Divider(),
             pn.pane.Markdown("#### Timepoint Change Sub-Plot"),
@@ -81,6 +98,7 @@ class TimeSeriesController:
             self.change_plot_warning,
             self.change_plot_controls_row,
             self.change_plot_stat_row,
+            self.change_send_row,
             self.change_plot_pane,
             self.change_plot_status,
             sizing_mode="stretch_width"
@@ -101,6 +119,11 @@ class TimeSeriesController:
         self.markov_show_text = pn.widgets.Checkbox(name="Show text on heatmaps", value=True)
         self.markov_btn = pn.widgets.Button(name="Run Markov Analysis", button_type="primary")
         self.markov_btn.on_click(self._on_markov_run)
+        self.markov_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
+        self.markov_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
+        self.markov_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
+        self.last_markov_fig = None
+        self.markov_send_btn.on_click(self._on_send_markov_to_html)
         self.markov_status = pn.pane.Markdown("")
         self.markov_results_container = pn.Column(sizing_mode="stretch_width")
         self.markov_preview = pn.pane.DataFrame(pd.DataFrame(), max_height=250, sizing_mode="stretch_width", visible=False)
@@ -163,14 +186,14 @@ class TimeSeriesController:
             pn.pane.Markdown("### 3. Time Series Configuration"),
             pn.Row(self.ts_x, pn.Column("Time variable type:", self.ts_x_type), self.ts_x_order),
             pn.Row(self.ts_y, self.ts_y_mode, self.ts_patient, self.ts_color),
-            pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn),
+            pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn, self.ts_caption, self.ts_send_btn, self.ts_send_status),
             self.plot_pane,
             self.change_plot_section,
             pn.layout.Divider(),
             pn.pane.Markdown("### 4. Markov State Transitions"),
             pn.Row(self.markov_patient, self.markov_time, pn.Column("Time variable type:", self.markov_time_type), self.markov_time_order),
             pn.Row(self.markov_state, self.markov_cov, self.markov_timing),
-            pn.Row(self.markov_svg_export, self.markov_show_text, pn.Spacer(width=12), self.markov_btn, self.markov_status),
+            pn.Row(self.markov_svg_export, self.markov_show_text, pn.Spacer(width=12), self.markov_btn, self.markov_caption, self.markov_send_btn, self.markov_status, self.markov_send_status),
             self.markov_results_container,
             sizing_mode="stretch_width"
         )
@@ -554,6 +577,7 @@ class TimeSeriesController:
             p_fig.add_tools(line_hover)
 
         self.last_traj_fig = p_fig
+        self.ts_send_btn.disabled = False
         self.plot_pane.object = p_fig
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
@@ -584,6 +608,7 @@ class TimeSeriesController:
         
         self.change_plot_controls_row.visible = (enabled and is_cat)
         self.change_plot_stat_row.visible = (enabled and is_cat)
+        self.change_send_row.visible = (enabled and is_cat)
         self.change_plot_pane.visible = (enabled and is_cat)
         self.change_plot_status.visible = (enabled and is_cat)
         
@@ -848,6 +873,7 @@ class TimeSeriesController:
         p_fig.y_range = Range1d(start=y_bot, end=y_top)
 
         self.last_change_fig = p_fig
+        self.change_send_btn.disabled = False
         self.change_plot_pane.object = p_fig
         save_tool = p_fig.select_one(SaveTool)
         if save_tool:
@@ -1089,6 +1115,8 @@ class TimeSeriesController:
                 
         plot_col = pn.Column(pn.pane.Bokeh(p), pn.pane.Bokeh(p2))
         self.markov_results_container.append(plot_col)
+        self.last_markov_fig = p
+        self.markov_send_btn.disabled = False
         
         # 2. Covariate Statistical Analysis
         if cov_col == "None":
@@ -1357,10 +1385,10 @@ class TimeSeriesController:
                         p3.output_backend = "svg"
                     viz_row = pn.Row(pn.pane.Bokeh(p3))
                     
-                self.markov_status.object += "<br>✅ Covariate Heatmap and Forest Plot successfully rendered."
+                self.markov_status.object += "<br>[OK] Covariate Heatmap and Forest Plot successfully rendered."
             except Exception as e:
                 viz_row = pn.pane.Markdown(f"**Error plotting covariate visuals:** {str(e)}")
-                self.markov_status.object += f"<br>❌ Error plotting visuals: {str(e)}"
+                self.markov_status.object += f"<br>[Error] Error plotting visuals: {str(e)}"
                 
             table_col = pn.Column(
                 pn.pane.Markdown(interpretation, sizing_mode="stretch_width"),
@@ -1373,6 +1401,75 @@ class TimeSeriesController:
             self.markov_status.object += "<br>Analysis complete."
         else:
             self.markov_status.object += "<br>Analysis complete, but no valid tests could be run (insufficient N)."
+
+    def _send_plot_to_html(self, entry: dict, status_pane: pn.pane.Markdown):
+        existing_idx = None
+        for i, p in enumerate(self.html_plots):
+            if p.get("id") == entry.get("id"):
+                existing_idx = i
+                break
+        if existing_idx is not None:
+            self.html_plots[existing_idx] = entry
+        else:
+            self.html_plots.append(entry)
+
+        status_pane.object = f"**Sent '{entry.get('title', 'plot')}' to HTML Report export.**"
+        if callable(self.on_send_to_html):
+            try:
+                self.on_send_to_html(entry)
+            except Exception as e:
+                print(f"[TimeSeriesController] Failed to send plot to HTML report controller: {e}")
+
+    def _on_send_ts_to_html(self, _=None):
+        if self.last_traj_fig is None:
+            return
+        import re
+        x_col = str(self.ts_x.value or "Time")
+        y_col = str(self.ts_y.value or "Value")
+        title = f"Trajectories: {y_col} vs {x_col}"
+        entry = {
+            "id": f"ts_traj_{re.sub(r'[^a-zA-Z0-9_]', '_', y_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', x_col)}",
+            "type": "ts_trajectories",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_traj_fig,
+            "caption": self.ts_caption.value.strip() if self.ts_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.ts_send_status)
+
+    def _on_send_change_to_html(self, _=None):
+        if self.last_change_fig is None:
+            return
+        import re
+        y_col = str(self.ts_y.value or "Value")
+        t_a = str(self.change_t_a.value or "T_A")
+        t_b = str(self.change_t_b.value or "T_B")
+        title = f"Timepoint Change: {y_col} ({t_b} - {t_a})"
+        entry = {
+            "id": f"ts_change_{re.sub(r'[^a-zA-Z0-9_]', '_', y_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', t_a)}_{re.sub(r'[^a-zA-Z0-9_]', '_', t_b)}",
+            "type": "ts_change",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_change_fig,
+            "caption": self.change_caption.value.strip() if self.change_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.change_send_status)
+
+    def _on_send_markov_to_html(self, _=None):
+        if self.last_markov_fig is None:
+            return
+        import re
+        state_col = str(self.markov_state.value or "State")
+        title = f"Markov Transition Probabilities ({state_col})"
+        entry = {
+            "id": f"ts_markov_{re.sub(r'[^a-zA-Z0-9_]', '_', state_col)}",
+            "type": "ts_markov",
+            "category": "Time Series & Pseudotime",
+            "title": title,
+            "figure": self.last_markov_fig,
+            "caption": self.markov_caption.value.strip() if self.markov_caption.value else ""
+        }
+        self._send_plot_to_html(entry, self.markov_send_status)
 
 def build_timeseries_section():
     ctrl = TimeSeriesController()
