@@ -18,6 +18,11 @@ from scipy.stats import kruskal, linregress
 
 import common_plot
 from common_plot import TitledPlotPane, apply_export_prefix_to_pane
+try:
+    from version import APP_VERSION
+except Exception:
+    APP_VERSION = "v2.2.56"
+
 
 # ---------------- UI Alerts (No Emojis) ----------------
 def _ok(msg: str) -> str:
@@ -1003,29 +1008,7 @@ class HTMLReportController:
                 "default_title": "PCA Loadings for First 3 PCs (PC1, PC2, PC3)",
                 "getter": lambda: self._get_plot_viz_pc_loadings_1_3(),
                 "default_selected": True
-            },
-            # Time Series
-            {
-                "id": "ts_markov",
-                "category": "Time Series & Pseudotime",
-                "default_title": "Markov State Transition Probability Heatmap",
-                "getter": lambda: self._get_plot_ts_markov(),
-                "default_selected": False
-            },
-            {
-                "id": "ts_trajectories",
-                "category": "Time Series & Pseudotime",
-                "default_title": "Sample Trajectories Along Pseudotime",
-                "getter": lambda: self._get_plot_ts_trajectories(),
-                "default_selected": False
-            },
-            {
-                "id": "ts_change",
-                "category": "Time Series & Pseudotime",
-                "default_title": "Timepoint Change by Category",
-                "getter": lambda: self._get_plot_ts_change(),
-                "default_selected": False
-            },
+            }
         ]
 
     # ---------------- Plot Getters from Controllers ----------------
@@ -3133,24 +3116,45 @@ class HTMLReportController:
         section_items["Alpha Diversity Analysis"].sort(key=alpha_sort_key)
 
         # Sort Time Series & Transitions:
-        # 1. Trajectory/pseudotime, 2. Transition prob table, 3. Network diagram, 4. Covariate table, 5. Covariate heatmap, 6. Forest plot, 7. Images
+        # 1. Trajectory/pseudotime (first, wide solo)
+        # 2. Timepoint change plots
+        # 3. Transition probability & transition network & covariate heatmap
+        # 4. Markov covariate table & corresponding forest plot (side by side)
+        # 5. External images / other
         def ts_sort_key(it):
             iid = it.get("id", "").lower()
-            if "pseudo" in iid or ("time" in iid and "trans" not in iid):
+            itype = (it.get("type") or "").lower()
+            title = it.get("title", "").lower()
+
+            # 1. Trajectories
+            if "traj" in iid or "traj" in itype or "trajector" in title or "pseudotime" in title:
                 return (0, 0, iid)
-            if "trans_prob" in iid or (it.get("markov_table_data") is not None and "covariate" not in iid):
+
+            # 2. Timepoint change plots
+            if "change" in iid or "change" in itype or "timepoint change" in title:
                 return (1, 0, iid)
-            if "network" in iid:
+
+            # 3. Transition probability and transition network
+            if "prob" in iid or "prob" in itype:
                 return (2, 0, iid)
-            if "covariate_stats" in iid or (it.get("markov_table_data") is not None and "covariate" in iid):
-                return (3, 0, iid)
-            if "heatmap" in iid:
-                return (4, 0, iid)
-            if "forest" in iid:
-                return (5, 0, iid)
+            if "net" in iid or "net" in itype:
+                return (2, 1, iid)
+            if ("cov" in iid or "cov" in itype) and ("table" not in iid and "forest" not in iid):
+                return (2, 2, iid)
+
+            # 4. Table & Forest plot (paired by suffix or state/cov)
+            if it.get("markov_table_data") is not None or "table" in iid or itype == "markov_table":
+                pair_tag = iid.replace("ts_markov_table_", "").replace("markov_table_", "")
+                return (3, pair_tag, 0, iid)
+            if "forest" in iid or itype == "ts_markov_forest":
+                pair_tag = iid.replace("ts_markov_forest_", "").replace("markov_forest_", "")
+                return (3, pair_tag, 1, iid)
+
+            # 5. External images
             if it.get("kind") == "image":
-                return (6, 0, iid)
-            return (7, 0, iid)
+                return (4, 0, 0, iid)
+
+            return (5, 0, 0, iid)
 
         section_items["Time Series & Transitions"].sort(key=ts_sort_key)
 
@@ -3174,10 +3178,14 @@ class HTMLReportController:
             sec_id = f"sec-{re.sub(r'[^a-zA-Z0-9_]', '-', sec_name.lower())}"
             sub_links = []
             grid_cards_html = ""
+            skip_ids = set()
 
             for it in items:
+                item_id = it.get("id", f"item_{total_rendered_figures + 1}")
+                if item_id in skip_ids:
+                    continue
+
                 total_rendered_figures += 1
-                item_id = it.get("id", f"item_{total_rendered_figures}")
                 card_id = f"card-{item_id}"
                 item_title = it.get("title", f"Figure {total_rendered_figures}")
                 caption_val = it.get("caption", "").strip() if it.get("caption") else ""
@@ -3185,8 +3193,55 @@ class HTMLReportController:
 
                 sub_links.append(f"<li><a href='#{card_id}'>{item_title}</a></li>")
 
+                # Trajectories are centered solo and wide (not squished into 2 columns)
+                is_trajectory = ("traj" in item_id.lower() or "traj" in (it.get("type") or "").lower() or "trajector" in item_title.lower())
+
+                # Check for Markov table paired with forest plot
+                if it.get("markov_table_data") is not None and sec_name == "Time Series & Transitions":
+                    pair_tag = item_id.replace("ts_markov_table_", "").replace("markov_table_", "")
+                    matching_forest = None
+                    for other in items:
+                        if other.get("id") not in skip_ids and other.get("id") != item_id:
+                            o_id = other.get("id", "")
+                            if "forest" in o_id.lower() or other.get("type") == "ts_markov_forest":
+                                o_tag = o_id.replace("ts_markov_forest_", "").replace("markov_forest_", "")
+                                if o_tag == pair_tag or not matching_forest:
+                                    matching_forest = other
+                                    if o_tag == pair_tag:
+                                        break
+                    if matching_forest:
+                        skip_ids.add(matching_forest["id"])
+                        total_rendered_figures += 1
+                        f_id = matching_forest.get("id", f"item_{total_rendered_figures}")
+                        f_card_id = f"card-{f_id}"
+                        f_title = matching_forest.get("title", "Markov Forest Plot")
+                        f_cap_val = matching_forest.get("caption", "").strip() if matching_forest.get("caption") else ""
+                        f_caption_html = f"<p class='plot-caption'>{f_cap_val}</p>" if f_cap_val else ""
+                        sub_links.append(f"<li><a href='#{f_card_id}'>{f_title}</a></li>")
+
+                        markov_content = self._format_markov_table_html(it["markov_table_data"])
+                        f_plot_key = f"std_{f_id}" if f"std_{f_id}" in divs else f"sub_{f_id}"
+                        f_div_html = divs.get(f_plot_key, "")
+
+                        grid_cards_html += f"""
+                        <div class="grid-card-full table-forest-pair-container" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 0; background: transparent; border: none; box-shadow: none;">
+                            <div class="grid-card" id="{card_id}">
+                                <h3 class="plot-title">{item_title}</h3>
+                                {markov_content}
+                                {caption_html}
+                            </div>
+                            <div class="grid-card" id="{f_card_id}">
+                                <h3 class="plot-title">{f_title}</h3>
+                                <div class="plot-container">{f_div_html}</div>
+                                {f_caption_html}
+                            </div>
+                        </div>
+                        """
+                        continue
+
                 is_full_width = (
-                    it.get("kind") == "nmf_group"
+                    is_trajectory
+                    or it.get("kind") == "nmf_group"
                     or it.get("snr_data") is not None
                     or it.get("alpha_table_data") is not None
                     or it.get("markov_table_data") is not None
@@ -3281,10 +3336,11 @@ class HTMLReportController:
                 else:
                     plot_key = f"std_{item_id}" if f"std_{item_id}" in divs else f"sub_{item_id}"
                     div_html = divs.get(plot_key, "")
+                    extra_style = " style='display: flex; justify-content: center;'" if is_trajectory else ""
                     grid_cards_html += f"""
                     <div class="{card_class}" id="{card_id}">
                         <h3 class="plot-title">{item_title}</h3>
-                        <div class="plot-container">{div_html}</div>
+                        <div class="plot-container"{extra_style}>{div_html}</div>
                         {caption_html}
                     </div>
                     """
@@ -3327,7 +3383,7 @@ class HTMLReportController:
         if author:
             meta_pills += f"<span class='pill'><b>Analyst:</b> {author}</span>"
         meta_pills += f"<span class='pill'><b>Total Figures:</b> {total_items}</span>"
-        meta_pills += f"<span class='pill'><b>Engine:</b> CEtools / Bokeh {bokeh.__version__}</span>"
+        meta_pills += f"<span class='pill'><b>Engine:</b> CEtools {APP_VERSION} / Bokeh {bokeh.__version__}</span>"
         meta_pills += "</div>"
 
         subtitle_html = f"<p class='report-subtitle'>{subtitle}</p>" if subtitle else ""
@@ -3377,6 +3433,95 @@ class HTMLReportController:
     padding: 32px;
     margin-bottom: 24px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  }}
+  .header-content {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 20px;
+  }}
+  .header-info {{
+    flex: 1;
+    min-width: 320px;
+  }}
+  .report-export-toolbar {{
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 270px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  }}
+  .export-toggle-box {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    justify-content: space-between;
+  }}
+  .export-label {{
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #334155;
+  }}
+  .format-toggle-group {{
+    display: inline-flex;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    overflow: hidden;
+    background: #ffffff;
+  }}
+  .format-btn {{
+    background: #ffffff;
+    border: none;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #475569;
+    transition: all 0.2s ease;
+  }}
+  .format-btn:hover {{
+    background: #f1f5f9;
+  }}
+  .format-btn.active {{
+    background: var(--primary);
+    color: #ffffff;
+  }}
+  .batch-download-btn {{
+    background: #ffffff;
+    border: 1px solid var(--primary-light);
+    color: var(--primary);
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    width: 100%;
+    text-align: center;
+  }}
+  .batch-download-btn:hover {{
+    background: #eff6ff;
+    border-color: var(--primary);
+  }}
+  .export-hint {{
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }}
+  .table-forest-pair-container {{
+    margin-bottom: 16px;
+  }}
+  @media (max-width: 960px) {{
+    .table-forest-pair-container {{
+      grid-template-columns: 1fr !important;
+    }}
   }}
   h1 {{
     color: var(--primary);
@@ -3621,9 +3766,26 @@ class HTMLReportController:
 <body>
 <div class="container">
   <div class="header-card">
-    <h1>{title}</h1>
-    {subtitle_html}
-    {meta_pills}
+    <div class="header-content">
+      <div class="header-info">
+        <h1>{title}</h1>
+        {subtitle_html}
+        {meta_pills}
+      </div>
+      <div class="report-export-toolbar">
+        <div class="export-toggle-box">
+          <span class="export-label">Plot Export Format:</span>
+          <div class="format-toggle-group">
+            <button type="button" class="format-btn active" id="btn-format-png" onclick="setGlobalPlotFormat('png')">PNG</button>
+            <button type="button" class="format-btn" id="btn-format-svg" onclick="setGlobalPlotFormat('svg')">SVG</button>
+          </div>
+        </div>
+        <button type="button" class="batch-download-btn" id="btn-download-all" onclick="downloadAllFigures()">
+          Export All Plots
+        </button>
+        <span class="export-hint" id="export-hint">Default: PNG. Click to switch all plot exports to SVG.</span>
+      </div>
+    </div>
   </div>
 
   {toc_html}
@@ -3631,10 +3793,177 @@ class HTMLReportController:
   {body_sections_html}
 
   <div class="footer">
-    Report compiled on {date_str} using CEtools pipeline.
+    Report compiled on {date_str} using CEtools analysis pipeline {APP_VERSION}.
   </div>
 </div>
 {script}
+<script>
+let currentPlotFormat = 'png';
+
+function setGlobalPlotFormat(format) {{
+  currentPlotFormat = format;
+  const btnPng = document.getElementById('btn-format-png');
+  const btnSvg = document.getElementById('btn-format-svg');
+  const hint = document.getElementById('export-hint');
+  if (format === 'svg') {{
+    if (btnPng) btnPng.classList.remove('active');
+    if (btnSvg) btnSvg.classList.add('active');
+    if (hint) hint.textContent = 'SVG selected. Individual plot save icons and batch export use SVG vector format.';
+  }} else {{
+    if (btnSvg) btnSvg.classList.remove('active');
+    if (btnPng) btnPng.classList.add('active');
+    if (hint) hint.textContent = 'Default: PNG. Click to switch all plot exports to SVG.';
+  }}
+  applyBackendToBokeh(format);
+}}
+
+function applyBackendToBokeh(format) {{
+  const backend = (format === 'svg') ? 'svg' : 'canvas';
+  if (window.Bokeh && window.Bokeh.index) {{
+    for (const [el, view] of window.Bokeh.index) {{
+      updateViewBackend(view, backend, format);
+    }}
+  }}
+  if (window.Bokeh && window.Bokeh.documents) {{
+    for (const doc of window.Bokeh.documents) {{
+      if (doc._all_models) {{
+        for (const model of doc._all_models.values()) {{
+          if (model.output_backend !== undefined) {{
+            model.output_backend = backend;
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
+
+function updateViewBackend(view, backend, format) {{
+  if (!view) return;
+  if (view.model && view.model.output_backend !== undefined) {{
+    view.model.output_backend = backend;
+  }}
+  if (view.canvas_view && view.canvas_view.model) {{
+    view.canvas_view.model.output_backend = backend;
+  }}
+  if (view.tool_views) {{
+    for (const [tool, tool_view] of view.tool_views) {{
+      if (tool_view && tool_view.model && tool_view.model.type === 'SaveTool') {{
+        overrideSaveToolView(tool_view, view);
+      }}
+    }}
+  }}
+  if (view.child_views) {{
+    for (const child of view.child_views) {{
+      updateViewBackend(child, backend, format);
+    }}
+  }}
+}}
+
+function overrideSaveToolView(tool_view, plot_view) {{
+  if (tool_view._custom_save_attached) return;
+  tool_view._custom_save_attached = true;
+  tool_view.save = async function(filename) {{
+    try {{
+      const fmt = currentPlotFormat || 'png';
+      const blob = await plot_view.export(fmt).to_blob();
+      let name = filename || tool_view.model.filename || (plot_view.model.title ? plot_view.model.title.text : 'bokeh_plot');
+      name = name.replace(/\\.(png|svg)$/i, '');
+      name = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.' + fmt;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }} catch (e) {{
+      console.warn('Custom save failed, falling back:', e);
+      if (tool_view.parent && typeof tool_view.parent.export === 'function') {{
+        const b = await tool_view.parent.export().to_blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = (filename || 'plot') + '.' + currentPlotFormat;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }}
+    }}
+  }};
+}}
+
+function initPlotExportHooks() {{
+  if (window.Bokeh && window.Bokeh.index && window.Bokeh.index.size > 0) {{
+    applyBackendToBokeh(currentPlotFormat);
+  }} else {{
+    setTimeout(initPlotExportHooks, 250);
+  }}
+}}
+if (document.readyState === 'loading') {{
+  document.addEventListener('DOMContentLoaded', initPlotExportHooks);
+}} else {{
+  initPlotExportHooks();
+}}
+
+async function downloadAllFigures() {{
+  const btn = document.getElementById('btn-download-all');
+  const origText = btn ? btn.innerText : '';
+  if (btn) {{
+    btn.disabled = true;
+    btn.innerText = 'Exporting...';
+  }}
+  try {{
+    const fmt = currentPlotFormat || 'png';
+    const plots = [];
+    if (window.Bokeh && window.Bokeh.index) {{
+      for (const [el, view] of window.Bokeh.index) {{
+        collectPlotViews(view, plots);
+      }}
+    }}
+    if (plots.length === 0) {{
+      alert('No exportable plots found.');
+      return;
+    }}
+    let count = 0;
+    for (const p of plots) {{
+      count++;
+      let title = (p.model && p.model.title && p.model.title.text) ? p.model.title.text : ('figure_' + count);
+      title = title.replace(/[^a-zA-Z0-9_-]/g, '_');
+      try {{
+        const blob = await p.export(fmt).to_blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${{title}}.${{fmt}}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+        await new Promise(r => setTimeout(r, 200));
+      }} catch (err) {{
+        console.warn(`Could not export figure ${{title}}:`, err);
+      }}
+    }}
+  }} finally {{
+    if (btn) {{
+      btn.disabled = false;
+      btn.innerText = origText;
+    }}
+  }}
+}}
+
+function collectPlotViews(view, result) {{
+  if (!view) return;
+  if (view.model && (view.model.type === 'Plot' || view.model.type === 'Figure')) {{
+    result.push(view);
+  }} else if (view.child_views) {{
+    for (const child of view.child_views) {{
+      collectPlotViews(child, result);
+    }}
+  }} else if (typeof view.export === 'function') {{
+    result.push(view);
+  }}
+}}
+</script>
 </body>
 </html>"""
         return full_html, total_items
