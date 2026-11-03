@@ -61,6 +61,7 @@ class TimeSeriesController:
 
         self.plot_pane = pn.pane.Bokeh(sizing_mode="fixed", width=800, height=600)
         self.last_traj_fig = None
+        self.ts_title = pn.widgets.TextInput(name="Plot Title", placeholder="Auto-detected title...", width=320)
         self.ts_caption = pn.widgets.TextInput(placeholder="Optional caption...", value="", width=250)
         self.ts_send_btn = pn.widgets.Button(name="Send to HTML", button_type="primary", disabled=True, width=120)
         self.ts_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
@@ -201,6 +202,11 @@ class TimeSeriesController:
         self.change_fdr.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_svg_export.param.watch(lambda *_: self._render_change_plot(), 'value')
         
+        self.ts_y.param.watch(lambda *_: self._auto_update_ts_title(), 'value')
+        self.ts_y_mode.param.watch(lambda *_: self._auto_update_ts_title(), 'value')
+        self.ts_color.param.watch(lambda *_: self._auto_update_ts_title(), 'value')
+        self.ts_title.param.watch(self._on_ts_title_change, 'value')
+
         self.section = pn.Column(
             pn.pane.Markdown("## Time Series Plot\nUpload standalone files, or let the session automatically bridge generated data here."),
             pn.pane.Markdown("### 1. Manual Data Upload"),
@@ -221,7 +227,7 @@ class TimeSeriesController:
             pn.pane.Markdown("### 3. Time Series Configuration"),
             pn.Row(self.ts_x, pn.Column("Time variable type:", self.ts_x_type), self.ts_x_order),
             pn.Row(self.ts_y, self.ts_y_mode, self.ts_patient, self.ts_color),
-            pn.Row(self.svg_export, pn.Spacer(width=12), self.visualize_btn, self.ts_caption, self.ts_send_btn, self.ts_send_status),
+            pn.Row(self.ts_title, self.svg_export, pn.Spacer(width=12), self.visualize_btn, self.ts_caption, self.ts_send_btn, self.ts_send_status),
             self.plot_pane,
             self.change_plot_section,
             pn.layout.Divider(),
@@ -396,8 +402,35 @@ class TimeSeriesController:
             self.ts_x.value = cols[0]
             self.ts_y.value = cols[0]
             self.ts_patient.value = cols[0]
+        self._auto_update_ts_title()
         self._update_slicing_ui()
         self._update_change_timepoint_options()
+
+    def _get_default_ts_title(self) -> str:
+        y_col = str(self.ts_y.value or "Value")
+        mode_val = str(self.ts_y_mode.value or "Actual Value")
+        if "Net Change" in mode_val or "Initial" in mode_val:
+            mode_str = "Change from Initial"
+        elif "Previous" in mode_val:
+            mode_str = "Change from Previous"
+        else:
+            mode_str = "Actual Value"
+
+        color_col = str(self.ts_color.value or "None")
+        if color_col and color_col != "None":
+            color_str = f", colored by {color_col}"
+        else:
+            color_str = ""
+
+        return f"{y_col} ({mode_str}){color_str}"
+
+    def _auto_update_ts_title(self, *_):
+        if hasattr(self, "ts_title"):
+            self.ts_title.value = self._get_default_ts_title()
+
+    def _on_ts_title_change(self, event):
+        if self.last_traj_fig is not None and event.new:
+            self.last_traj_fig.title.text = event.new
 
     def _on_visualize(self, event):
         self.plot_pane.object = None
@@ -504,8 +537,9 @@ class TimeSeriesController:
             y_range = None
 
         # Prepare Bokeh Plot
+        plot_title = self.ts_title.value.strip() if (hasattr(self, "ts_title") and self.ts_title.value) else self._get_default_ts_title()
         kwargs = {
-            "width": 800, "height": 600, "title": "Time Series Plot",
+            "width": 800, "height": 600, "title": plot_title,
             "x_axis_label": x_col, "y_axis_label": f"{y_col} ({y_mode})",
             "tools": "pan,wheel_zoom,box_zoom,reset,save",
             "output_backend": "svg" if self.svg_export.value else "canvas"
@@ -1494,7 +1528,7 @@ class TimeSeriesController:
         import re
         x_col = str(self.ts_x.value or "Time")
         y_col = str(self.ts_y.value or "Value")
-        title = f"Trajectories: {y_col} vs {x_col}"
+        title = self.ts_title.value.strip() if (hasattr(self, "ts_title") and self.ts_title.value) else self._get_default_ts_title()
         entry = {
             "id": f"ts_traj_{re.sub(r'[^a-zA-Z0-9_]', '_', y_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', x_col)}",
             "type": "ts_trajectories",

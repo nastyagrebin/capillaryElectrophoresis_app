@@ -21,7 +21,7 @@ from common_plot import TitledPlotPane, apply_export_prefix_to_pane
 try:
     from version import APP_VERSION
 except Exception:
-    APP_VERSION = "v2.2.56"
+    APP_VERSION = "v2.2.58"
 
 
 # ---------------- UI Alerts (No Emojis) ----------------
@@ -1954,22 +1954,20 @@ class HTMLReportController:
 
     def _auto_update_viz_title(self):
         m = getattr(self.viz_plot_method, "value", "PCA")
-        cvar = getattr(self.viz_color_var, "value", "") or ""
-        c_suffix = f" colored by {cvar}" if cvar else ""
+        cvar = (getattr(self.viz_color_var, "value", "") or "").strip()
+        c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
         if m == "PCA":
             x_val = getattr(self.viz_pca_x, "value", 1)
             y_val = getattr(self.viz_pca_y, "value", 2)
-            self.viz_plot_title.value = f"PCA Score Plot (PC{x_val} vs PC{y_val}){c_suffix}"
-        elif m == "PLS-DA":
+            self.viz_plot_title.value = f"PCA_PC{x_val}{y_val}{c_suffix}"
+        elif m in ("PLS-DA", "PLS"):
             x_val = getattr(self.viz_pls_x, "value", 1)
             y_val = getattr(self.viz_pls_y, "value", 2)
-            self.viz_plot_title.value = f"PLS-DA Score Plot (LV{x_val} vs LV{y_val}){c_suffix}"
+            self.viz_plot_title.value = f"PLS_LV{x_val}{y_val}{c_suffix}"
         elif m == "MDS":
-            metric = getattr(self.viz_mds_metric, "value", "euclidean")
-            self.viz_plot_title.value = f"MDS 2D Embedding (metric={metric}){c_suffix}"
-        elif m == "t-SNE":
-            metric = getattr(self.viz_tsne_metric, "value", "cosine")
-            self.viz_plot_title.value = f"t-SNE 2D Embedding (metric={metric}){c_suffix}"
+            self.viz_plot_title.value = f"MDS_2D{c_suffix}"
+        elif m in ("t-SNE", "tSNE"):
+            self.viz_plot_title.value = f"tSNE_2D{c_suffix}"
 
     def _update_viz_color_options(self):
         source = getattr(self.viz_color_source, "value", "Metadata Variable")
@@ -3493,23 +3491,6 @@ class HTMLReportController:
     background: var(--primary);
     color: #ffffff;
   }}
-  .batch-download-btn {{
-    background: #ffffff;
-    border: 1px solid var(--primary-light);
-    color: var(--primary);
-    padding: 7px 14px;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    width: 100%;
-    text-align: center;
-  }}
-  .batch-download-btn:hover {{
-    background: #eff6ff;
-    border-color: var(--primary);
-  }}
   .export-hint {{
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -3780,10 +3761,7 @@ class HTMLReportController:
             <button type="button" class="format-btn" id="btn-format-svg" onclick="setGlobalPlotFormat('svg')">SVG</button>
           </div>
         </div>
-        <button type="button" class="batch-download-btn" id="btn-download-all" onclick="downloadAllFigures()">
-          Export All Plots
-        </button>
-        <span class="export-hint" id="export-hint">Default: PNG. Click to switch all plot exports to SVG.</span>
+        <span class="export-hint" id="export-hint">Default: PNG. Click to switch plot save icons to SVG.</span>
       </div>
     </div>
   </div>
@@ -3808,11 +3786,11 @@ function setGlobalPlotFormat(format) {{
   if (format === 'svg') {{
     if (btnPng) btnPng.classList.remove('active');
     if (btnSvg) btnSvg.classList.add('active');
-    if (hint) hint.textContent = 'SVG selected. Individual plot save icons and batch export use SVG vector format.';
+    if (hint) hint.textContent = 'SVG selected. Individual plot save icons will download SVG files.';
   }} else {{
     if (btnSvg) btnSvg.classList.remove('active');
     if (btnPng) btnPng.classList.add('active');
-    if (hint) hint.textContent = 'Default: PNG. Click to switch all plot exports to SVG.';
+    if (hint) hint.textContent = 'Default: PNG. Individual plot save icons will download PNG files.';
   }}
   applyBackendToBokeh(format);
 }}
@@ -3820,7 +3798,8 @@ function setGlobalPlotFormat(format) {{
 function applyBackendToBokeh(format) {{
   const backend = (format === 'svg') ? 'svg' : 'canvas';
   if (window.Bokeh && window.Bokeh.index) {{
-    for (const [el, view] of window.Bokeh.index) {{
+    const views = Object.values(window.Bokeh.index);
+    for (const view of views) {{
       updateViewBackend(view, backend, format);
     }}
   }}
@@ -3847,7 +3826,7 @@ function updateViewBackend(view, backend, format) {{
   }}
   if (view.tool_views) {{
     for (const [tool, tool_view] of view.tool_views) {{
-      if (tool_view && tool_view.model && tool_view.model.type === 'SaveTool') {{
+      if (tool_view && tool_view.model && (tool_view.model.type === 'SaveTool' || (tool && tool.type === 'SaveTool'))) {{
         overrideSaveToolView(tool_view, view);
       }}
     }}
@@ -3893,7 +3872,7 @@ function overrideSaveToolView(tool_view, plot_view) {{
 }}
 
 function initPlotExportHooks() {{
-  if (window.Bokeh && window.Bokeh.index && window.Bokeh.index.size > 0) {{
+  if (window.Bokeh && window.Bokeh.index && Object.keys(window.Bokeh.index).length > 0) {{
     applyBackendToBokeh(currentPlotFormat);
   }} else {{
     setTimeout(initPlotExportHooks, 250);
@@ -3903,65 +3882,6 @@ if (document.readyState === 'loading') {{
   document.addEventListener('DOMContentLoaded', initPlotExportHooks);
 }} else {{
   initPlotExportHooks();
-}}
-
-async function downloadAllFigures() {{
-  const btn = document.getElementById('btn-download-all');
-  const origText = btn ? btn.innerText : '';
-  if (btn) {{
-    btn.disabled = true;
-    btn.innerText = 'Exporting...';
-  }}
-  try {{
-    const fmt = currentPlotFormat || 'png';
-    const plots = [];
-    if (window.Bokeh && window.Bokeh.index) {{
-      for (const [el, view] of window.Bokeh.index) {{
-        collectPlotViews(view, plots);
-      }}
-    }}
-    if (plots.length === 0) {{
-      alert('No exportable plots found.');
-      return;
-    }}
-    let count = 0;
-    for (const p of plots) {{
-      count++;
-      let title = (p.model && p.model.title && p.model.title.text) ? p.model.title.text : ('figure_' + count);
-      title = title.replace(/[^a-zA-Z0-9_-]/g, '_');
-      try {{
-        const blob = await p.export(fmt).to_blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `${{title}}.${{fmt}}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-        await new Promise(r => setTimeout(r, 200));
-      }} catch (err) {{
-        console.warn(`Could not export figure ${{title}}:`, err);
-      }}
-    }}
-  }} finally {{
-    if (btn) {{
-      btn.disabled = false;
-      btn.innerText = origText;
-    }}
-  }}
-}}
-
-function collectPlotViews(view, result) {{
-  if (!view) return;
-  if (view.model && (view.model.type === 'Plot' || view.model.type === 'Figure')) {{
-    result.push(view);
-  }} else if (view.child_views) {{
-    for (const child of view.child_views) {{
-      collectPlotViews(child, result);
-    }}
-  }} else if (typeof view.export === 'function') {{
-    result.push(view);
-  }}
 }}
 </script>
 </body>

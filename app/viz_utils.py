@@ -904,7 +904,9 @@ class VizController:
         fig.height = None
         pcx = int(self.pca_x.value)
         pcy = int(self.pca_y.value)
-        title = f"PCA of NMF loadings (PC{pcx} vs PC{pcy})"
+        cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+        c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        title = f"PCA_PC{pcx}{pcy}{c_suffix}"
         entry = {
             "id": f"viz_pca_pc{pcx}_pc{pcy}",
             "type": "viz_pca",
@@ -928,7 +930,9 @@ class VizController:
         fig.height = None
         lv_x = int(self.pls_x.value)
         lv_y = int(self.pls_y.value)
-        title = f"PLS-DA of NMF loadings (LV{lv_x} vs LV{lv_y})"
+        cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+        c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        title = f"PLS_LV{lv_x}{lv_y}{c_suffix}"
         entry = {
             "id": f"viz_pls_lv{lv_x}_lv{lv_y}",
             "type": "viz_pls",
@@ -978,11 +982,14 @@ class VizController:
         fig.width = None
         fig.height = None
         metric = str(self.mds_metric.value)
+        cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+        c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        title = f"MDS_2D{c_suffix}"
         entry = {
             "id": f"viz_mds_{metric}",
             "type": "viz_mds",
             "category": "Dimensionality Reduction",
-            "title": f"MDS (2D) - {metric}",
+            "title": title,
             "figure": fig,
             "caption": self.mds_caption.value.strip() if self.mds_caption.value else ""
         }
@@ -1001,11 +1008,14 @@ class VizController:
         fig.height = None
         metric = str(self.tsne_metric.value)
         perp = float(self.tsne_perp.value)
+        cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+        c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        title = f"tSNE_2D{c_suffix}"
         entry = {
             "id": f"viz_tsne_{metric}_{int(perp)}",
             "type": "viz_tsne",
             "category": "Dimensionality Reduction",
-            "title": f"t-SNE (2D) - {metric} (perp={perp:.0f})",
+            "title": title,
             "figure": fig,
             "caption": self.tsne_caption.value.strip() if self.tsne_caption.value else ""
         }
