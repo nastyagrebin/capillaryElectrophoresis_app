@@ -21,7 +21,7 @@ from common_plot import TitledPlotPane, apply_export_prefix_to_pane
 try:
     from version import APP_VERSION
 except Exception:
-    APP_VERSION = "v2.2.60"
+    APP_VERSION = "v2.2.62"
 
 
 # ---------------- UI Alerts (No Emojis) ----------------
@@ -488,6 +488,32 @@ def detach_bokeh_models(models: Union[bokeh.models.Model, Sequence[bokeh.models.
             ref._document = None
             if hasattr(ref, "_temp_document"):
                 ref._temp_document = None
+
+
+def set_bokeh_output_backend_svg(models: Union[bokeh.models.Model, Sequence[bokeh.models.Model], Dict[str, bokeh.models.Model]]):
+    """Recursively set output_backend = 'svg' on all Bokeh plots and models so Bokeh renders genuine vector elements."""
+    if isinstance(models, dict):
+        model_list = list(models.values())
+    elif isinstance(models, (list, tuple)):
+        model_list = list(models)
+    else:
+        model_list = [models]
+
+    for m in model_list:
+        if m is None:
+            continue
+        all_models = [m]
+        if hasattr(m, "references"):
+            try:
+                all_models.extend(m.references())
+            except Exception:
+                pass
+        for ref in all_models:
+            if hasattr(ref, "output_backend"):
+                try:
+                    ref.output_backend = "svg"
+                except Exception:
+                    pass
 
 
 def attach_interactive_offset_slider(fig_or_layout: Any, initial_offset: float = 0.0, max_offset: float = 10.0, step: float = 0.5) -> Any:
@@ -2893,6 +2919,7 @@ class HTMLReportController:
             figures_dict[f"sub_{sp['id']}"] = sp["figure"]
 
         # Render Bokeh scripts and divs safely with document detachment
+        set_bokeh_output_backend_svg(figures_dict)
         detach_bokeh_models(figures_dict)
         try:
             script, divs = components(figures_dict) if figures_dict else ("", {})
@@ -3791,44 +3818,56 @@ function setGlobalPlotFormat(format) {{
   if (format === 'svg') {{
     if (btnPng) btnPng.classList.remove('active');
     if (btnSvg) btnSvg.classList.add('active');
-    if (hint) hint.textContent = 'SVG selected. Individual plot save icons will download SVG files.';
+    if (hint) hint.textContent = 'SVG selected. Individual plot save icons will download vector SVG files.';
   }} else {{
     if (btnSvg) btnSvg.classList.remove('active');
     if (btnPng) btnPng.classList.add('active');
-    if (hint) hint.textContent = 'Default: PNG. Individual plot save icons will download PNG files.';
+    if (hint) hint.textContent = 'Default: PNG. Individual plot save icons will download high-DPI PNG files.';
   }}
-  applyBackendToBokeh(format);
+  attachAllSaveToolOverrides();
 }}
 
-function applyBackendToBokeh(format) {{
-  const backend = (format === 'svg') ? 'svg' : 'canvas';
+async function svgToPngBlob(svgBlob, width, height) {{
+  return new Promise((resolve, reject) => {{
+    const url = URL.createObjectURL(svgBlob);
+    const img = new Image();
+    img.onload = () => {{
+      URL.revokeObjectURL(url);
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      const w = width || img.naturalWidth || 800;
+      const h = height || img.naturalHeight || 450;
+      canvas.width = w * scale;
+      canvas.height = h * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => {{
+        if (blob) resolve(blob);
+        else reject(new Error('Failed to create PNG blob'));
+      }}, 'image/png');
+    }};
+    img.onerror = (e) => {{
+      URL.revokeObjectURL(url);
+      reject(e);
+    }};
+    img.src = url;
+  }});
+}}
+
+function attachAllSaveToolOverrides() {{
   if (window.Bokeh && window.Bokeh.index) {{
     const views = Object.values(window.Bokeh.index);
     for (const view of views) {{
-      updateViewBackend(view, backend, format);
-    }}
-  }}
-  if (window.Bokeh && window.Bokeh.documents) {{
-    for (const doc of window.Bokeh.documents) {{
-      if (doc._all_models) {{
-        for (const model of doc._all_models.values()) {{
-          if (model.output_backend !== undefined) {{
-            model.output_backend = backend;
-          }}
-        }}
-      }}
+      attachSaveToolToView(view);
     }}
   }}
 }}
 
-function updateViewBackend(view, backend, format) {{
+function attachSaveToolToView(view) {{
   if (!view) return;
-  if (view.model && view.model.output_backend !== undefined) {{
-    view.model.output_backend = backend;
-  }}
-  if (view.canvas_view && view.canvas_view.model) {{
-    view.canvas_view.model.output_backend = backend;
-  }}
   if (view.tool_views) {{
     for (const [tool, tool_view] of view.tool_views) {{
       if (tool_view && tool_view.model && (tool_view.model.type === 'SaveTool' || (tool && tool.type === 'SaveTool'))) {{
@@ -3838,7 +3877,7 @@ function updateViewBackend(view, backend, format) {{
   }}
   if (view.child_views) {{
     for (const child of view.child_views) {{
-      updateViewBackend(child, backend, format);
+      attachSaveToolToView(child);
     }}
   }}
 }}
@@ -3849,7 +3888,15 @@ function overrideSaveToolView(tool_view, plot_view) {{
   tool_view.save = async function(filename) {{
     try {{
       const fmt = currentPlotFormat || 'png';
-      const blob = await plot_view.export(fmt).to_blob();
+      let blob;
+      if (fmt === 'svg') {{
+        blob = await plot_view.export('svg').to_blob();
+      }} else {{
+        const svgBlob = await plot_view.export('svg').to_blob();
+        const w = (plot_view.bbox && plot_view.bbox.width) || (plot_view.layout && plot_view.layout.bbox && plot_view.layout.bbox.width) || 800;
+        const h = (plot_view.bbox && plot_view.bbox.height) || (plot_view.layout && plot_view.layout.bbox && plot_view.layout.bbox.height) || 450;
+        blob = await svgToPngBlob(svgBlob, w, h);
+      }}
       let name = filename || tool_view.model.filename || (plot_view.model.title ? plot_view.model.title.text : 'bokeh_plot');
       name = name.replace(/\\.(png|svg)$/i, '');
       name = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.' + fmt;
@@ -3864,23 +3911,33 @@ function overrideSaveToolView(tool_view, plot_view) {{
     }} catch (e) {{
       console.warn('Custom save failed, falling back:', e);
       if (tool_view.parent && typeof tool_view.parent.export === 'function') {{
-        const b = await tool_view.parent.export().to_blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(b);
-        a.download = (filename || 'plot') + '.' + currentPlotFormat;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        try {{
+          const b = await tool_view.parent.export().to_blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(b);
+          a.download = (filename || 'plot') + '.' + currentPlotFormat;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }} catch (err) {{
+          console.error('Fallback export failed:', err);
+        }}
       }}
     }}
   }};
 }}
 
 function initPlotExportHooks() {{
-  if (window.Bokeh && window.Bokeh.index && Object.keys(window.Bokeh.index).length > 0) {{
-    applyBackendToBokeh(currentPlotFormat);
-  }} else {{
+  attachAllSaveToolOverrides();
+  if (!window.Bokeh || !window.Bokeh.index || Object.keys(window.Bokeh.index).length === 0) {{
     setTimeout(initPlotExportHooks, 250);
+  }} else {{
+    let checks = 0;
+    const interval = setInterval(() => {{
+      attachAllSaveToolOverrides();
+      checks++;
+      if (checks > 10) clearInterval(interval);
+    }}, 1000);
   }}
 }}
 if (document.readyState === 'loading') {{
