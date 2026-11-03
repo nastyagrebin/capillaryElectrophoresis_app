@@ -36,12 +36,16 @@ class TitledPlotPane(pn.viewable.Viewer):
             title = getattr(self.object, "title", None)
             # If the user hasn't typed anything yet, or we're initializing, use the plot's default
             if title and hasattr(title, "text"):
-                if not getattr(self, "_user_edited", False) and self.title_input.value == "Plot":
-                    self.title_input.value = title.text
+                if not getattr(self, "_user_edited", False):
+                    self._updating_from_object = True
+                    try:
+                        self.title_input.value = title.text
+                    finally:
+                        self._updating_from_object = False
             self._update_title()
 
     def _update_title(self, event=None):
-        if event is not None:
+        if event is not None and not getattr(self, "_updating_from_object", False):
             self._user_edited = True
         fig = self.bokeh_pane.object
         if fig and getattr(fig, "title", None) and hasattr(fig.title, "text"):
@@ -61,11 +65,13 @@ def apply_export_prefix_to_pane(pane_obj, prefix: str, old_prefix: str = ""):
             apply_export_prefix_to_pane(child, prefix, old_prefix)
     
     if isinstance(pane_obj, TitledPlotPane):
-        val = pane_obj.title_input.value
-        if old_prefix and val.startswith(f"{old_prefix}_"):
-            pane_obj.title_input.value = f"{prefix}_{val[len(old_prefix)+1:]}"
-        elif not val.startswith(f"{prefix}_"):
-            pane_obj.title_input.value = f"{prefix}_{val}"
+        fig = getattr(pane_obj.bokeh_pane, "object", None)
+        if fig and hasattr(fig, "tools"):
+            for t in fig.tools:
+                if type(t).__name__ == "SaveTool":
+                    t_str = pane_obj.title_input.value or "plot"
+                    clean_str = t_str.replace(' ', '_').replace('/', '_')
+                    t.filename = f"{prefix}_{clean_str}" if prefix else clean_str
     elif isinstance(pane_obj, pn.widgets.FileDownload):
         if getattr(pane_obj, "_manually_prefixed", False):
             return

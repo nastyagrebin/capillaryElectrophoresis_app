@@ -575,9 +575,13 @@ class VizController:
             calc_width = 620 if cat else 520
             calc_height = 420
 
+            cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+            c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+            pca_title = f"PCA_PC{pcx}{pcy}{c_suffix}"
+
             p = bokeh.plotting.figure(
                 width=calc_width, height=calc_height,
-                title=f"PCA of NMF loadings (PC{pcx} vs PC{pcy})",
+                title=pca_title,
                 x_axis_label=f"PC{pcx} {pca.explained_variance_ratio_[ix]*100.0:.1f}%",
                 y_axis_label=f"PC{pcy} {pca.explained_variance_ratio_[iy]*100.0:.1f}%",
                 tools="hover,pan,box_zoom,reset,save",
@@ -606,7 +610,6 @@ class VizController:
                 _add_ellipses(p, x, y, cats, cmap)
                 p.legend.click_policy = "hide"
                 p.add_layout(p.legend[0], "right")
-                p.title.text += " — colored by category"
 
                 # PLS-DA
                 from sklearn.cross_decomposition import PLSRegression
@@ -627,9 +630,10 @@ class VizController:
                         scores_pls = pls.transform(X)
                         pls_x_vals, pls_y_vals = scores_pls[:, lv_x - 1], scores_pls[:, lv_y - 1]
                         
+                        pls_title = f"PLS_LV{lv_x}{lv_y}{c_suffix}"
                         pls_p = bokeh.plotting.figure(
                             width=calc_width, height=calc_height,
-                            title="PLS-DA of NMF loadings",
+                            title=pls_title,
                             x_axis_label=f"LV{lv_x}", y_axis_label=f"LV{lv_y}",
                             tools="hover,pan,box_zoom,reset,save",
                             active_scroll=None,
@@ -667,7 +671,6 @@ class VizController:
                 color_var = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value)
                 color_bar = bokeh.models.ColorBar(color_mapper=mapper, title=str(color_var)[:20], label_standoff=8, location=(0, 0))
                 p.add_layout(color_bar, "right")
-                p.title.text += f" — colored by {str(color_var)[:20]}"
 
             p.add_tools(bokeh.models.HoverTool(tooltips=[("sample", "@label"), ("x", "@x{0.000}"), ("y", "@y{0.000}")]))
             
@@ -786,7 +789,10 @@ class VizController:
                 for rb in mds_fig.right:
                     if isinstance(rb, bokeh.models.ColorBar):
                         rb.title = str(color_var)[:20]
-                mds_fig.title.text += f" — colored by {str(color_var)[:20]}"
+
+            cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+            c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+            mds_fig.title.text = f"MDS_2D{c_suffix}"
                 
             self.mds_pane.object = mds_fig
             self.last_mds_fig = mds_fig
@@ -859,7 +865,10 @@ class VizController:
                 for rb in tsne_fig.right:
                     if isinstance(rb, bokeh.models.ColorBar):
                         rb.title = str(color_var)[:20]
-                tsne_fig.title.text += f" — colored by {str(color_var)[:20]}"
+
+            cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
+            c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+            tsne_fig.title.text = f"tSNE_2D{c_suffix}"
                 
             self.tsne_pane.object = tsne_fig
             self.last_tsne_fig = tsne_fig
@@ -906,9 +915,10 @@ class VizController:
         pcy = int(self.pca_y.value)
         cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
         c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        safe_cvar = re.sub(r'[^a-zA-Z0-9_]', '_', cvar) if (cvar and cvar != "None") else "none"
         title = f"PCA_PC{pcx}{pcy}{c_suffix}"
         entry = {
-            "id": f"viz_pca_pc{pcx}_pc{pcy}",
+            "id": f"viz_pca_pc{pcx}_pc{pcy}_{safe_cvar}",
             "type": "viz_pca",
             "category": "Dimensionality Reduction",
             "title": title,
@@ -932,9 +942,10 @@ class VizController:
         lv_y = int(self.pls_y.value)
         cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
         c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        safe_cvar = re.sub(r'[^a-zA-Z0-9_]', '_', cvar) if (cvar and cvar != "None") else "none"
         title = f"PLS_LV{lv_x}{lv_y}{c_suffix}"
         entry = {
-            "id": f"viz_pls_lv{lv_x}_lv{lv_y}",
+            "id": f"viz_pls_lv{lv_x}_lv{lv_y}_{safe_cvar}",
             "type": "viz_pls",
             "category": "Dimensionality Reduction",
             "title": title,
@@ -984,9 +995,10 @@ class VizController:
         metric = str(self.mds_metric.value)
         cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
         c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        safe_cvar = re.sub(r'[^a-zA-Z0-9_]', '_', cvar) if (cvar and cvar != "None") else "none"
         title = f"MDS_2D{c_suffix}"
         entry = {
-            "id": f"viz_mds_{metric}",
+            "id": f"viz_mds_{metric}_{safe_cvar}",
             "type": "viz_mds",
             "category": "Dimensionality Reduction",
             "title": title,
@@ -1010,9 +1022,10 @@ class VizController:
         perp = float(self.tsne_perp.value)
         cvar = str(self.div_metric_select.value) if self.color_source.value == "diversity metric" else str(self.meta_col_select.value or "")
         c_suffix = f"_coloredBy{cvar}" if cvar and cvar != "None" else ""
+        safe_cvar = re.sub(r'[^a-zA-Z0-9_]', '_', cvar) if (cvar and cvar != "None") else "none"
         title = f"tSNE_2D{c_suffix}"
         entry = {
-            "id": f"viz_tsne_{metric}_{int(perp)}",
+            "id": f"viz_tsne_{metric}_{int(perp)}_{safe_cvar}",
             "type": "viz_tsne",
             "category": "Dimensionality Reduction",
             "title": title,

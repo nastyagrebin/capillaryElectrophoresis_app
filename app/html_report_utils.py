@@ -21,7 +21,7 @@ from common_plot import TitledPlotPane, apply_export_prefix_to_pane
 try:
     from version import APP_VERSION
 except Exception:
-    APP_VERSION = "v2.2.58"
+    APP_VERSION = "v2.2.60"
 
 
 # ---------------- UI Alerts (No Emojis) ----------------
@@ -2594,7 +2594,11 @@ class HTMLReportController:
 
     def _remove_additional_plot(self, index: int):
         if 0 <= index < len(self.additional_pipeline_plots):
-            self.additional_pipeline_plots.pop(index)
+            removed = self.additional_pipeline_plots.pop(index)
+            rem_id = removed.get("id")
+            for ctrl in self.controllers.values():
+                if hasattr(ctrl, "html_plots"):
+                    ctrl.html_plots = [p for p in ctrl.html_plots if p.get("id") != rem_id]
             self._render_additional_plots_list()
             self.report_status.object = _ok("Removed sub-plot.")
 
@@ -2832,6 +2836,7 @@ class HTMLReportController:
                         target_cat = p_cat
                     selected_standard_plots.append({
                         "id": sp["id"],
+                        "type": sp.get("type", "custom_plot"),
                         "category": target_cat,
                         "title": sp["title"],
                         "figure": fig,

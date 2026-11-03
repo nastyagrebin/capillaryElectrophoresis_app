@@ -431,6 +431,10 @@ class TimeSeriesController:
     def _on_ts_title_change(self, event):
         if self.last_traj_fig is not None and event.new:
             self.last_traj_fig.title.text = event.new
+            if getattr(self.last_traj_fig, "_cetools_sent", False):
+                import uuid
+                self.last_traj_fig._cetools_uid = uuid.uuid4().hex[:8]
+                self.last_traj_fig._cetools_sent = False
 
     def _on_visualize(self, event):
         self.plot_pane.object = None
@@ -443,10 +447,10 @@ class TimeSeriesController:
         y_col = self.ts_y.value
         y_mode = self.ts_y_mode.value
         p_col = self.ts_patient.value
-        color_col = self.ts_color.value
+        color_col = str(self.ts_color.value or "None")
         
         df = current_df[[x_col, y_col, p_col]].copy()
-        if color_col != "None":
+        if color_col != "None" and color_col in current_df.columns:
             # Treat color variable as categorical by casting to string
             df[color_col] = current_df[color_col].astype(str)
         df = df.dropna()
@@ -645,6 +649,9 @@ class TimeSeriesController:
             line_hover = HoverTool(renderers=[lines_renderer], tooltips=[("Patient", "@patient")], callback=callback, mode='mouse')
             p_fig.add_tools(line_hover)
 
+        import uuid
+        p_fig._cetools_uid = uuid.uuid4().hex[:8]
+        p_fig._cetools_sent = False
         self.last_traj_fig = p_fig
         self.ts_send_btn.disabled = False
         self.plot_pane.object = p_fig
@@ -741,7 +748,7 @@ class TimeSeriesController:
         x_col = self.ts_x.value
         y_col = self.ts_y.value
         p_col = self.ts_patient.value
-        color_col = self.ts_color.value
+        color_col = str(self.ts_color.value or "None")
         
         if not x_col or not y_col or not p_col:
             return
@@ -941,6 +948,9 @@ class TimeSeriesController:
         y_top = current_y + step * 0.4 if bracket_count > 0 else max_y + step * 0.6
         p_fig.y_range = Range1d(start=y_bot, end=y_top)
 
+        import uuid
+        p_fig._cetools_uid = uuid.uuid4().hex[:8]
+        p_fig._cetools_sent = False
         self.last_change_fig = p_fig
         self.change_send_btn.disabled = False
         self.change_plot_pane.object = p_fig
@@ -1525,12 +1535,21 @@ class TimeSeriesController:
     def _on_send_ts_to_html(self, _=None):
         if self.last_traj_fig is None:
             return
-        import re
+        import re, uuid
         x_col = str(self.ts_x.value or "Time")
         y_col = str(self.ts_y.value or "Value")
         title = self.ts_title.value.strip() if (hasattr(self, "ts_title") and self.ts_title.value) else self._get_default_ts_title()
+
+        fig_uid = getattr(self.last_traj_fig, "_cetools_uid", None)
+        if not fig_uid:
+            fig_uid = uuid.uuid4().hex[:8]
+            self.last_traj_fig._cetools_uid = fig_uid
+        self.last_traj_fig._cetools_sent = True
+
+        safe_y = re.sub(r'[^a-zA-Z0-9_]', '_', y_col)
+        safe_x = re.sub(r'[^a-zA-Z0-9_]', '_', x_col)
         entry = {
-            "id": f"ts_traj_{re.sub(r'[^a-zA-Z0-9_]', '_', y_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', x_col)}",
+            "id": f"ts_traj_{safe_y}_{safe_x}_{fig_uid}",
             "type": "ts_trajectories",
             "category": "Time Series & Pseudotime",
             "title": title,
@@ -1542,13 +1561,23 @@ class TimeSeriesController:
     def _on_send_change_to_html(self, _=None):
         if self.last_change_fig is None:
             return
-        import re
+        import re, uuid
         y_col = str(self.ts_y.value or "Value")
         t_a = str(self.change_t_a.value or "T_A")
         t_b = str(self.change_t_b.value or "T_B")
         title = f"Timepoint Change: {y_col} ({t_b} - {t_a})"
+
+        fig_uid = getattr(self.last_change_fig, "_cetools_uid", None)
+        if not fig_uid:
+            fig_uid = uuid.uuid4().hex[:8]
+            self.last_change_fig._cetools_uid = fig_uid
+        self.last_change_fig._cetools_sent = True
+
+        safe_y = re.sub(r'[^a-zA-Z0-9_]', '_', y_col)
+        safe_ta = re.sub(r'[^a-zA-Z0-9_]', '_', t_a)
+        safe_tb = re.sub(r'[^a-zA-Z0-9_]', '_', t_b)
         entry = {
-            "id": f"ts_change_{re.sub(r'[^a-zA-Z0-9_]', '_', y_col)}_{re.sub(r'[^a-zA-Z0-9_]', '_', t_a)}_{re.sub(r'[^a-zA-Z0-9_]', '_', t_b)}",
+            "id": f"ts_change_{safe_y}_{safe_ta}_{safe_tb}_{fig_uid}",
             "type": "ts_change",
             "category": "Time Series & Pseudotime",
             "title": title,
