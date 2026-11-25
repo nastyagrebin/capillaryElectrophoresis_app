@@ -95,6 +95,7 @@ def apply_export_prefix_to_pane(pane_obj, prefix: str, old_prefix: str = ""):
                         t.filename = f"{prefix}_{t_str.replace(' ', '_').replace('/', '_')}"
 import colorcet as cc
 import cmcrameri.cm as cmc
+import bokeh.palettes as bp
 
 CURRENT_PALETTE_NAME = "glasbey"
 
@@ -108,8 +109,13 @@ def get_available_palettes() -> Dict[str, str]:
     palettes["glasbey (Categorical)"] = "glasbey"
     palettes["glasbey_cool (Categorical)"] = "glasbey_cool"
     palettes["glasbey_warm (Categorical)"] = "glasbey_warm"
+
+    # 2. Add Bokeh default categorical maps
+    palettes["Bokeh (Categorical)"] = "Bokeh"
+    palettes["Category10 (Bokeh Default, Categorical)"] = "Category10"
+    palettes["Category20 (Categorical)"] = "Category20"
     
-    # 2. Add cmcrameri maps (only continuous and divergent, no categorical)
+    # 3. Add cmcrameri maps (only continuous and divergent, no categorical)
     for name in dir(cmc):
         if name.startswith("_") or name.endswith("_r") or name.endswith("S"):
             continue
@@ -147,6 +153,19 @@ def _palette(n: int, force_name: str = None):
             
     elif hasattr(cc, target_name):
         palette_data = getattr(cc, target_name)
+
+    elif hasattr(bp, target_name):
+        b_pal = getattr(bp, target_name)
+        if isinstance(b_pal, dict):
+            max_len = max(b_pal.keys())
+            if n in b_pal:
+                palette_data = list(b_pal[n])
+            elif n <= max_len and n >= min(b_pal.keys()):
+                palette_data = list(b_pal[n])
+            else:
+                palette_data = list(b_pal[max_len])
+        elif isinstance(b_pal, (list, tuple)):
+            palette_data = list(b_pal)
         
     if palette_data is None:
         # Fallback to Category10 / Turbo256
@@ -161,7 +180,12 @@ def _palette(n: int, force_name: str = None):
 
 def is_categorical(name: str = None) -> bool:
     name = name or CURRENT_PALETTE_NAME
-    return name.startswith("glasbey") or name.endswith("S")
+    return (
+        name.startswith("glasbey")
+        or name.startswith("Category")
+        or name == "Bokeh"
+        or name.endswith("S")
+    )
 
 def is_divergent(name: str = None) -> bool:
     name = name or CURRENT_PALETTE_NAME

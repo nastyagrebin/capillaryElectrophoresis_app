@@ -593,12 +593,8 @@ class VizController:
             if cat:
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Magma256
-                if len(unique) <= 10:
-                    palette = list(Category10[10])
-                else:
-                    idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Magma256[i] for i in idxs]
+                import common_plot
+                palette = common_plot._palette(len(unique))
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 # Plot PCA categorical
@@ -766,12 +762,8 @@ class VizController:
                 labels = np.array(list(map(str, H_subset.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Magma256
-                if len(unique) <= 10:
-                    palette = list(Category10[10])
-                else:
-                    idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Magma256[i] for i in idxs]
+                import common_plot
+                palette = common_plot._palette(len(unique))
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 for c in unique:
@@ -842,12 +834,8 @@ class VizController:
                 labels = np.array(list(map(str, H_subset.index.astype(str))))
                 cats = [str(meta.get(s, "NA")) if meta.get(s, None) is not None else "NA" for s in labels]
                 unique = sorted(set(cats))
-                from bokeh.palettes import Category10, Magma256
-                if len(unique) <= 10:
-                    palette = list(Category10[10])
-                else:
-                    idxs = np.linspace(0, 255, num=len(unique), dtype=int)
-                    palette = [Magma256[i] for i in idxs]
+                import common_plot
+                palette = common_plot._palette(len(unique))
                 cmap = {c: palette[i % len(palette)] for i, c in enumerate(unique)}
                 
                 for c in unique:

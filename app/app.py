@@ -1384,7 +1384,7 @@ HEADER_ROW = pn.Row(HEADER, pn.Spacer(sizing_mode='stretch_width'), global_color
 
 COLORMAP_INFO = pn.pane.Markdown("""
 ***Colormap Types**: **Continuous** creates a smooth gradient (great for many samples or time-series). **Categorical** uses distinct, high-contrast colors (great for discrete groups). **Divergent** transitions between two contrasting colors. 
-Colormaps provided by [Crameri (Scientific Colour Maps)](https://www.fabiocrameri.ch/colourmaps/) and [Colorcet (Glasbey)](https://colorcet.holoviz.org/)*
+Colormaps provided by [Crameri (Scientific Colour Maps)](https://www.fabiocrameri.ch/colourmaps/), [Colorcet (Glasbey)](https://colorcet.holoviz.org/), and [Bokeh](https://docs.bokeh.org/en/latest/docs/reference/palettes.html)*
 """, sizing_mode="stretch_width", margin=(0, 15, 10, 15))
 
 app = pn.Column(HEADER_ROW, COLORMAP_INFO, bridge_status, TABS, sizing_mode="stretch_width")
