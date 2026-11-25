@@ -71,7 +71,8 @@ class TimeSeriesController:
         self.enable_change_plot = pn.widgets.Checkbox(name="Enable Timepoint Change Sub-Plot", value=False)
         self.change_t_a = pn.widgets.Select(name="Timepoint A (Baseline)", options=[], width=170)
         self.change_t_b = pn.widgets.Select(name="Timepoint B (Comparison)", options=[], width=170)
-        self.change_cat_timing = pn.widgets.Select(name="Category X-axis Timing", options=["Timepoint B", "Timepoint A"], value="Timepoint B", width=180)
+        self.change_cat_timing = pn.widgets.Select(name="Category X-axis Timing", options=["Timepoint B", "Timepoint A"], value="Timepoint B", width=170)
+        self.change_color_timing = pn.widgets.Select(name="Point Color Timing", options=["Timepoint B", "Timepoint A"], value="Timepoint B", width=170)
         self.change_stat = pn.widgets.RadioButtonGroup(name="Stat Test", options=["Mann-Whitney", "Kruskal-Wallis"], value="Mann-Whitney")
         self.change_fdr = pn.widgets.Checkbox(name="FDR Correction (BH)", value=True)
         self.change_svg_export = pn.widgets.Checkbox(name="SVG Export Mode (slower)", value=False)
@@ -84,7 +85,9 @@ class TimeSeriesController:
         self.change_send_status = pn.pane.Markdown("", margin=(5, 0, 0, 10))
         self.change_send_btn.on_click(self._on_send_change_to_html)
 
-        self.change_plot_controls_row = pn.Row(self.change_t_a, self.change_t_b, self.change_cat_timing, visible=False)
+        self.change_plot_controls_row = pn.Row(
+            self.change_t_a, self.change_t_b, self.change_cat_timing, self.change_color_timing, visible=False
+        )
         self.change_plot_stat_row = pn.Row(
             pn.Column("Significance Test:", self.change_stat),
             pn.Column("Correction:", self.change_fdr),
@@ -198,6 +201,7 @@ class TimeSeriesController:
         self.change_t_a.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_t_b.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_cat_timing.param.watch(lambda *_: self._render_change_plot(), 'value')
+        self.change_color_timing.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_stat.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_fdr.param.watch(lambda *_: self._render_change_plot(), 'value')
         self.change_svg_export.param.watch(lambda *_: self._render_change_plot(), 'value')
@@ -730,6 +734,19 @@ class TimeSeriesController:
             self.change_t_a.value = timepoints[0]
             self.change_t_b.value = timepoints[0]
 
+        timing_opts = ["Timepoint B", "Timepoint A"]
+        for tp in timepoints:
+            if tp not in timing_opts:
+                timing_opts.append(tp)
+
+        self.change_cat_timing.options = timing_opts
+        if not self.change_cat_timing.value or self.change_cat_timing.value not in timing_opts:
+            self.change_cat_timing.value = "Timepoint B"
+
+        self.change_color_timing.options = timing_opts
+        if not self.change_color_timing.value or self.change_color_timing.value not in timing_opts:
+            self.change_color_timing.value = "Timepoint B"
+
     def _render_change_plot(self):
         self.change_plot_pane.object = None
         self.last_change_fig = None
@@ -768,8 +785,18 @@ class TimeSeriesController:
             self.change_plot_status.object = "*Timepoint A and Timepoint B must be different.*"
             return
 
-        ref_timing = self.change_cat_timing.value
-        ref_t = t_b if ref_timing == "Timepoint B" else t_a
+        cat_timing = str(self.change_cat_timing.value or "Timepoint B")
+        color_timing = str(self.change_color_timing.value or "Timepoint B")
+
+        def _resolve_timing(val):
+            if val == "Timepoint B":
+                return t_b
+            elif val == "Timepoint A":
+                return t_a
+            return val
+
+        x_t = _resolve_timing(cat_timing)
+        color_t = _resolve_timing(color_timing)
 
         needed_cols = [x_col, y_col, p_col, color_col]
         for c in needed_cols:
@@ -794,10 +821,20 @@ class TimeSeriesController:
         val_a = df_a.groupby(p_col)[y_col].mean()
         val_b = df_b.groupby(p_col)[y_col].mean()
 
-        ref_df = df_b if ref_timing == "Timepoint B" else df_a
-        cat_map = ref_df.groupby(p_col)[color_col].first()
+        df_x_cat = sub_df[sub_df[x_col] == x_t]
+        if df_x_cat.empty:
+            self.change_plot_status.object = f"*No valid samples found for X-axis categories at timepoint '{x_t}'.*"
+            return
 
-        common_patients = val_a.index.intersection(val_b.index).intersection(cat_map.dropna().index)
+        df_color = sub_df[sub_df[x_col] == color_t]
+        if df_color.empty:
+            self.change_plot_status.object = f"*No valid samples found for point colors at timepoint '{color_t}'.*"
+            return
+
+        x_cat_map = df_x_cat.groupby(p_col)[color_col].first()
+        color_map = df_color.groupby(p_col)[color_col].first()
+
+        common_patients = val_a.index.intersection(val_b.index).intersection(x_cat_map.dropna().index).intersection(color_map.dropna().index)
         if len(common_patients) == 0:
             self.change_plot_status.object = f"*No overlapping patients found between '{t_a}' and '{t_b}' with valid '{color_col}'.*"
             return
@@ -807,27 +844,32 @@ class TimeSeriesController:
             ya = float(val_a.loc[p])
             yb = float(val_b.loc[p])
             dy = yb - ya
-            c_val = str(cat_map.loc[p])
+            x_cat_val = str(x_cat_map.loc[p])
+            col_cat_val = str(color_map.loc[p])
             records.append({
                 "patient": p,
-                "category": c_val,
+                "x_category": x_cat_val,
+                "color_category": col_cat_val,
+                "category": x_cat_val,
                 "y_a": ya,
                 "y_b": yb,
                 "delta_y": dy
             })
 
         delta_df = pd.DataFrame(records)
-        groups = sorted(delta_df["category"].dropna().unique().tolist())
-        if len(groups) < 1:
+        x_groups = sorted(delta_df["x_category"].dropna().unique().tolist())
+        color_groups = sorted(delta_df["color_category"].dropna().unique().tolist())
+        groups = x_groups
+        if len(x_groups) < 1:
             self.change_plot_status.object = "*No valid categories found.*"
             return
 
         # Significance testing between categories
-        pairs = list(itertools.combinations(groups, 2)) if len(groups) >= 2 else []
+        pairs = list(itertools.combinations(x_groups, 2)) if len(x_groups) >= 2 else []
         pvals = []
         for g1, g2 in pairs:
-            v1 = delta_df[delta_df["category"] == g1]["delta_y"].dropna().values
-            v2 = delta_df[delta_df["category"] == g2]["delta_y"].dropna().values
+            v1 = delta_df[delta_df["x_category"] == g1]["delta_y"].dropna().values
+            v2 = delta_df[delta_df["x_category"] == g2]["delta_y"].dropna().values
             if len(v1) == 0 or len(v2) == 0:
                 pvals.append(1.0)
                 continue
@@ -856,59 +898,79 @@ class TimeSeriesController:
         import common_plot
 
         is_svg = bool(self.change_svg_export.value or self.svg_export.value)
-        title_str = f"Change in {y_col} ({t_b} - {t_a}) by {color_col} (at {ref_t})"
+        if x_t == color_t:
+            title_str = f"Change in {y_col} ({t_b} - {t_a}) by {color_col} (at {x_t})"
+        else:
+            title_str = f"Change in {y_col} ({t_b} - {t_a}) by {color_col} (X: {x_t}, Color: {color_t})"
+
         p_fig = figure(
             width=800, height=480,
             title=title_str,
-            x_axis_label=f"{color_col} (at {ref_t})",
+            x_axis_label=f"{color_col} (at {x_t})",
             y_axis_label=f"Change in {y_col} ({t_b} - {t_a})",
             tools="pan,wheel_zoom,box_zoom,reset,save",
             output_backend="svg" if is_svg else "canvas"
         )
 
-        p_fig.xaxis.ticker = list(range(len(groups)))
-        p_fig.xaxis.major_label_overrides = {i: g for i, g in enumerate(groups)}
-        if any(len(str(g)) > 6 for g in groups):
+        p_fig.xaxis.ticker = list(range(len(x_groups)))
+        p_fig.xaxis.major_label_overrides = {i: g for i, g in enumerate(x_groups)}
+        if any(len(str(g)) > 6 for g in x_groups):
             p_fig.xaxis.major_label_orientation = math.pi / 4
 
         zero_line = Span(location=0, dimension='width', line_dash='dashed', line_color='#94a3b8', line_width=1.5)
         p_fig.add_layout(zero_line)
 
-        palette = common_plot._palette(len(groups)) if len(groups) > 1 else ["#2563eb"]
+        palette = common_plot._palette(len(color_groups)) if len(color_groups) > 1 else ["#2563eb"]
+        color_map_dict = {cg: palette[idx % len(palette)] for idx, cg in enumerate(color_groups)}
 
         rng = np.random.default_rng(42)
+
+        x_group_indices = {g: i for i, g in enumerate(x_groups)}
+        delta_df["x_base"] = delta_df["x_category"].map(x_group_indices)
+        delta_df["x_jitter"] = delta_df["x_base"] + rng.uniform(-0.15, 0.15, size=len(delta_df))
+
         circle_renderers = []
-        for i, g in enumerate(groups):
-            gdf = delta_df[delta_df["category"] == g].copy()
+        for cg in color_groups:
+            gdf = delta_df[delta_df["color_category"] == cg].copy()
             if gdf.empty:
                 continue
-            vals = gdf["delta_y"].values
-            n_pts = len(vals)
-            xs = i + rng.uniform(-0.15, 0.15, size=n_pts)
-            gdf["x_jitter"] = xs
-
             src = ColumnDataSource(gdf)
-            col_color = palette[i % len(palette)]
+            col_color = color_map_dict[cg]
             r = p_fig.circle(
                 "x_jitter", "delta_y", size=8, alpha=0.8,
                 fill_color=col_color, line_color="#1e293b", line_width=1,
-                source=src, legend_label=str(g)[:15]
+                source=src, legend_label=str(cg)[:15]
             )
             circle_renderers.append(r)
 
-            # Median bar
-            med = float(np.median(vals))
-            p_fig.line([i - 0.22, i + 0.22], [med, med], color='black', line_width=2.5)
+        # Median bar per X-axis category
+        for i, xg in enumerate(x_groups):
+            vals = delta_df[delta_df["x_category"] == xg]["delta_y"].values
+            if len(vals) > 0:
+                med = float(np.median(vals))
+                p_fig.line([i - 0.22, i + 0.22], [med, med], color='black', line_width=2.5)
 
-        hover = HoverTool(
-            renderers=circle_renderers,
-            tooltips=[
+        if x_t == color_t:
+            hover_tooltips = [
                 ("Patient", "@patient"),
-                ("Category", "@category"),
+                ("Category", "@x_category"),
                 (f"Change ({t_b} - {t_a})", "@delta_y{0.000}"),
                 (f"Value at {t_a}", "@y_a{0.000}"),
                 (f"Value at {t_b}", "@y_b{0.000}")
             ]
+        else:
+            hover_tooltips = [
+                ("Patient", "@patient"),
+                (f"X Category ({x_t})", "@x_category"),
+                (f"Color Category ({color_t})", "@color_category"),
+                (f"Change ({t_b} - {t_a})", "@delta_y{0.000}"),
+                (f"Value at {t_a}", "@y_a{0.000}"),
+                (f"Value at {t_b}", "@y_b{0.000}")
+            ]
+
+        hover = HoverTool(
+            renderers=circle_renderers,
+            tooltips=hover_tooltips
         )
         p_fig.add_tools(hover)
 
@@ -916,6 +978,8 @@ class TimeSeriesController:
             p_fig.legend.click_policy = "hide"
             p_fig.legend.location = "top_left"
             p_fig.legend.orientation = "horizontal"
+            if x_t != color_t:
+                p_fig.legend.title = f"{color_col} ({color_t})"
             p_fig.add_layout(p_fig.legend[0], "above")
 
         min_y = float(delta_df["delta_y"].min())
@@ -931,8 +995,8 @@ class TimeSeriesController:
             if ast == "n.s.":
                 continue
             bracket_count += 1
-            i1 = groups.index(g1)
-            i2 = groups.index(g2)
+            i1 = x_groups.index(g1)
+            i2 = x_groups.index(g2)
             p_fig.line(
                 [i1, i1, i2, i2],
                 [current_y - step * 0.25, current_y, current_y, current_y - step * 0.25],
@@ -961,7 +1025,7 @@ class TimeSeriesController:
         from common_plot import apply_export_prefix_to_pane
         prefix = getattr(self, "export_prefix", "CE_analysis")
         apply_export_prefix_to_pane(self.change_plot_pane, prefix)
-        self.change_plot_status.object = f"Rendered comparison of **{len(common_patients)}** patients across **{len(groups)}** categories."
+        self.change_plot_status.object = f"Rendered comparison of **{len(common_patients)}** patients across **{len(x_groups)}** categories."
 
 
     def _on_markov_run(self, event):
@@ -1565,7 +1629,10 @@ class TimeSeriesController:
         y_col = str(self.ts_y.value or "Value")
         t_a = str(self.change_t_a.value or "T_A")
         t_b = str(self.change_t_b.value or "T_B")
-        title = f"Timepoint Change: {y_col} ({t_b} - {t_a})"
+        if hasattr(self.last_change_fig, "title") and self.last_change_fig.title and self.last_change_fig.title.text:
+            title = self.last_change_fig.title.text
+        else:
+            title = f"Timepoint Change: {y_col} ({t_b} - {t_a})"
 
         fig_uid = getattr(self.last_change_fig, "_cetools_uid", None)
         if not fig_uid:

@@ -21,7 +21,7 @@ from common_plot import TitledPlotPane, apply_export_prefix_to_pane
 try:
     from version import APP_VERSION
 except Exception:
-    APP_VERSION = "v2.2.62"
+    APP_VERSION = "v2.2.64"
 
 
 # ---------------- UI Alerts (No Emojis) ----------------
